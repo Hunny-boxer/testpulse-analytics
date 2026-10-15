@@ -1,3 +1,4 @@
+
 """Parse JUnit XML reports into normalized TestPulse results."""
 
 from __future__ import annotations
@@ -53,11 +54,13 @@ def parse_junit_xml(xml_content: str | bytes) -> dict:
     else:
         raise JUnitParseError("XML content must be text or bytes.")
 
-    if not raw or not raw.strip():
-        raise JUnitParseError("XML content is empty.")
-
+    # Check size first so oversized content is rejected consistently,
+    # including content that contains only whitespace.
     if len(raw) > MAX_XML_BYTES:
         raise JUnitParseError("XML report exceeds the 10 MiB size limit.")
+
+    if not raw or not raw.strip():
+        raise JUnitParseError("XML content is empty.")
 
     # JUnit reports do not need DTDs or custom entity declarations.
     upper_raw = raw.upper()
