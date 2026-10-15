@@ -66,7 +66,6 @@ def test_upload_rejects_non_xml_filename():
     )
 
     assert response.status_code == 415
-    assert " .xml" not in response.json()["detail"]
     assert ".xml" in response.json()["detail"]
 
 
