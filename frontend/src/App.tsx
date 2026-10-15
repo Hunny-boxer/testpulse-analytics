@@ -1,101 +1,214 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { getRuns, uploadReport } from "./api";
+import type { TestRun } from "./api";
 
-type TestRun = {
-  id: string;
-  name: string;
-  branch: string;
-  date: string;
-  duration: string;
-  passed: number;
-  failed: number;
-  skipped: number;
-  status: "Passed" | "Failed";
+type ChartPoint = {
+  label: string;
+  passedRate: number;
+  failedRate: number;
 };
 
-const runs: TestRun[] = [
-  {
-    id: "#1842",
-    name: "API regression suite",
-    branch: "feat/auth-refresh",
-    date: "Oct 15, 2026 · 11:24 AM",
-    duration: "48s",
-    passed: 128,
-    failed: 0,
-    skipped: 2,
-    status: "Passed",
-  },
-  {
-    id: "#1841",
-    name: "UI checkout flow",
-    branch: "main",
-    date: "Oct 15, 2026 · 10:52 AM",
-    duration: "2m 14s",
-    passed: 84,
-    failed: 3,
-    skipped: 1,
-    status: "Failed",
-  },
-  {
-    id: "#1840",
-    name: "Smoke tests",
-    branch: "release/2.4",
-    date: "Oct 15, 2026 · 09:41 AM",
-    duration: "36s",
-    passed: 46,
-    failed: 0,
-    skipped: 0,
-    status: "Passed",
-  },
-  {
-    id: "#1839",
-    name: "Payment service tests",
-    branch: "feat/payment-retry",
-    date: "Oct 14, 2026 · 05:18 PM",
-    duration: "1m 06s",
-    passed: 67,
-    failed: 2,
-    skipped: 3,
-    status: "Failed",
-  },
-];
+function getErrorMessage(error: unknown): string {
+  if (error instanceof TypeError) {
+    return "Could not reach the API. Check that the backend is running at http://localhost:8000.";
+  }
 
-const trend = [
-  { day: "09", passed: 72, failed: 12 },
-  { day: "10", passed: 84, failed: 8 },
-  { day: "11", passed: 76, failed: 14 },
-  { day: "12", passed: 91, failed: 6 },
-  { day: "13", passed: 87, failed: 9 },
-  { day: "14", passed: 95, failed: 5 },
-  { day: "15", passed: 98, failed: 3 },
-];
+  return error instanceof Error ? error.message : "An unexpected error occurred.";
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+
+  return `${minutes}m ${remainingSeconds.toString().padStart(2, "0")}s`;
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function App() {
+  const [runs, setRuns] = useState<TestRun[]>([]);
   const [query, setQuery] = useState("");
-  const [selectedFile, setSelectedFile] = useState("");
-  const [activeRange, setActiveRange] = useState("7 days");
+  const [selectedRange, setSelectedRange] = useState("7 days");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function refreshRuns() {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const response = await getRuns();
+      setRuns(response.runs);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshRuns();
+  }, []);
+
+  const totals = useMemo(() => {
+    return runs.reduce(
+      (acc, run) => {
+        acc.passed += run.summary.passed;
+        acc.failed += run.summary.failures;
+        acc.errors += run.summary.errors;
+        acc.skipped += run.summary.skipped;
+        acc.tests += run.summary.total_tests;
+        acc.duration += run.summary.duration_seconds;
+        acc.suites += run.summary.suite_count;
+        return acc;
+      },
+      {
+        passed: 0,
+        failed: 0,
+        errors: 0,
+        skipped: 0,
+        tests: 0,
+        duration: 0,
+        suites: 0,
+      }
+    );
+  }, [runs]);
+
+  const totalFailed = totals.failed + totals.errors;
+  const completedTests = totals.passed + totalFailed;
+  const passRate =
+    completedTests > 0 ? (totals.passed / completedTests) * 100 : null;
+  const averageDuration =
+    runs.length > 0 ? totals.duration / runs.length : null;
 
   const visibleRuns = useMemo(() => {
     const normalized = query.trim().toLowerCase();
 
     return runs.filter((run) =>
-      `${run.id} ${run.name} ${run.branch} ${run.status}`
+      `${run.id} ${run.filename} ${formatDate(run.created_at)}`
         .toLowerCase()
         .includes(normalized)
     );
-  }, [query]);
+  }, [runs, query]);
 
-  const totalPassed = 1248;
-  const totalFailed = 27;
-  const passRate = (
-    (totalPassed / (totalPassed + totalFailed)) *
-    100
-  ).toFixed(1);
+  const chartPoints = useMemo<ChartPoint[]>(() => {
+    const days = selectedRange === "7 days" ? 7 : 30;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+
+    return runs
+      .filter((run) => {
+        const timestamp = new Date(run.created_at).getTime();
+        return Number.isFinite(timestamp) && timestamp >= cutoff;
+      })
+      .slice(0, 7)
+      .reverse()
+      .map((run) => {
+        const summary = run.summary;
+        const finished =
+          summary.passed + summary.failures + summary.errors;
+
+        return {
+          label: new Date(run.created_at).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+          }),
+          passedRate: finished > 0 ? (summary.passed / finished) * 100 : 0,
+          failedRate:
+            finished > 0
+              ? ((summary.failures + summary.errors) / finished) * 100
+              : 0,
+        };
+      });
+  }, [runs, selectedRange]);
+
+  function chartPath(
+    points: ChartPoint[],
+    key: "passedRate" | "failedRate"
+  ): string {
+    if (points.length === 0) return "";
+
+    return points
+      .map((point, index) => {
+        const x = points.length === 1 ? 350 : (index * 700) / (points.length - 1);
+        const y = 205 - (point[key] / 100) * 180;
+        return `${index === 0 ? "M" : "L"}${x} ${y}`;
+      })
+      .join(" ");
+  }
+
+  function chartAreaPath(points: ChartPoint[]): string {
+    if (points.length === 0) return "";
+
+    const line = chartPath(points, "passedRate");
+    const lastX = points.length === 1 ? 350 : 700;
+
+    return `${line} L${lastX} 205 L${points.length === 1 ? 350 : 0} 205 Z`;
+  }
+
+  async function handleFileSelection(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+
+    if (!file) return;
+
+    setError("");
+    setNotice("");
+
+    if (!file.name.toLowerCase().endsWith(".xml")) {
+      setError("Please select a JUnit report with an .xml filename.");
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      const uploaded = await uploadReport(file);
+      setNotice(
+        `Imported ${uploaded.filename}: ${uploaded.summary.total_tests} tests saved as run #${uploaded.run_id}.`
+      );
+      await refreshRuns();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  const donutTotal = totals.passed + totalFailed + totals.skipped;
+  const donutPassedDegrees =
+    donutTotal > 0 ? (totals.passed / donutTotal) * 360 : 0;
+  const donutFailedDegrees =
+    donutTotal > 0 ? (totalFailed / donutTotal) * 360 : 0;
+
+  const donutBackground =
+    donutTotal > 0
+      ? `conic-gradient(#a78bfa 0deg ${donutPassedDegrees}deg, #fb7185 ${donutPassedDegrees}deg ${donutPassedDegrees + donutFailedDegrees}deg, #6286a8 ${donutPassedDegrees + donutFailedDegrees}deg 360deg)`
+      : "#2a2139";
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#" aria-label="TestPulse home">
+        <a className="brand" href="#overview" aria-label="TestPulse home">
           <span className="brand-mark">T</span>
           <span className="brand-name">
             Test<span>Pulse</span>
@@ -104,10 +217,10 @@ function App() {
 
         <div className="workspace-label">WORKSPACE</div>
         <div className="workspace-switcher">
-          <span className="workspace-avatar">H</span>
+          <span className="workspace-avatar">T</span>
           <span className="workspace-copy">
-            <strong>Hunny's workspace</strong>
-            <small>Free workspace</small>
+            <strong>TestPulse workspace</strong>
+            <small>Local environment</small>
           </span>
           <span className="chevron">⌄</span>
         </div>
@@ -126,7 +239,6 @@ function App() {
           <a className="nav-item" href="#failures">
             <span className="nav-icon">⊗</span>
             Failure insights
-            <span className="nav-count">5</span>
           </a>
 
           <p className="nav-label nav-label-spaced">MANAGE</p>
@@ -134,26 +246,23 @@ function App() {
             <span className="nav-icon">⇧</span>
             Import reports
           </a>
-          <a className="nav-item" href="#settings">
-            <span className="nav-icon">⚙</span>
-            Settings
-          </a>
         </nav>
 
         <div className="sidebar-bottom">
           <div className="pulse-card">
             <div className="pulse-orb">✳</div>
             <strong>Your quality pulse</strong>
-            <p>Your test analytics, all in one place.</p>
+            <p>Understand every test run. Release with confidence.</p>
             <span className="pulse-status">
-              <span className="status-dot" /> All systems operational
+              <span className="status-dot" />
+              {error ? "API needs attention" : "Report analytics"}
             </span>
           </div>
           <div className="profile">
-            <div className="profile-avatar">HB</div>
+            <div className="profile-avatar">TP</div>
             <div className="profile-copy">
-              <strong>Hunny Boxer</strong>
-              <span>Developer</span>
+              <strong>TestPulse</strong>
+              <span>Developer workspace</span>
             </div>
             <span className="profile-menu">···</span>
           </div>
@@ -169,16 +278,18 @@ function App() {
           </div>
           <div className="topbar-actions">
             <span className="environment-badge">
-              <span className="status-dot" /> Demo environment
+              <span className="status-dot" />
+              {isLoading ? "Connecting..." : error ? "API offline" : "API connected"}
             </span>
             <button
               className="icon-button"
               type="button"
-              aria-label="Notifications"
-              title="Notifications"
+              title="Refresh runs"
+              aria-label="Refresh test runs"
+              onClick={() => void refreshRuns()}
+              disabled={isLoading}
             >
-              ♧
-              <span className="notification-dot" />
+              ↻
             </button>
           </div>
         </header>
@@ -186,7 +297,8 @@ function App() {
         <section className="page-heading">
           <div>
             <div className="eyebrow">
-              <span className="eyebrow-line" /> TEST EXECUTION INTELLIGENCE
+              <span className="eyebrow-line" />
+              TEST EXECUTION INTELLIGENCE
             </div>
             <h1>
               Your quality, <span>at a glance.</span>
@@ -200,50 +312,70 @@ function App() {
             <input
               type="file"
               accept=".xml,application/xml,text/xml"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) setSelectedFile(file.name);
-              }}
+              onChange={(event) => void handleFileSelection(event)}
+              disabled={isUploading}
             />
-            <span className="upload-plus">＋</span>
-            Import JUnit report
+            <span className="upload-plus">{isUploading ? "…" : "＋"}</span>
+            {isUploading ? "Uploading report..." : "Import JUnit report"}
           </label>
         </section>
 
-        {selectedFile && (
-          <div className="file-selection" role="status">
+        {error && (
+          <div className="file-selection" role="alert">
             <span className="status-dot" />
             <span>
-              <strong>{selectedFile}</strong> selected. Backend upload
-              integration is coming next.
+              <strong>Could not complete the request.</strong> {error}
             </span>
             <button
               type="button"
-              onClick={() => setSelectedFile("")}
-              aria-label="Clear selected report"
+              onClick={() => void refreshRuns()}
+              aria-label="Retry API request"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {notice && (
+          <div className="file-selection" role="status">
+            <span className="status-dot" />
+            <span>{notice}</span>
+            <button
+              type="button"
+              onClick={() => setNotice("")}
+              aria-label="Dismiss success message"
             >
               ×
             </button>
           </div>
         )}
 
-        <section className="metrics-grid" aria-label="Test metrics">
+        <section className="metrics-grid" aria-label="Imported report metrics">
           <article className="metric-card">
             <div className="metric-top">
               <span className="metric-label">TOTAL TEST RUNS</span>
               <span className="metric-icon purple-icon">▤</span>
             </div>
-            <div className="metric-value">1,284</div>
+            <div className="metric-value">
+              {isLoading && runs.length === 0 ? "…" : runs.length.toLocaleString()}
+            </div>
             <div className="metric-foot">
-              <span className="trend-up">↗ 12.8%</span>
-              <span>vs. previous period</span>
+              <span>Saved reports</span>
+              <span>· Latest 100 loaded</span>
             </div>
             <div className="mini-bars purple-bars" aria-hidden="true">
-              {[28, 40, 34, 60, 45, 68, 53, 76, 61, 88, 72, 100].map(
-                (height, index) => (
-                  <span key={index} style={{ height: `${height}%` }} />
-                )
-              )}
+              {runs.slice(0, 12).reverse().map((run) => {
+                const rate =
+                  run.summary.total_tests > 0
+                    ? (run.summary.passed / run.summary.total_tests) * 100
+                    : 0;
+                return (
+                  <span
+                    key={run.id}
+                    style={{ height: `${Math.max(8, rate)}%` }}
+                  />
+                );
+              })}
             </div>
           </article>
 
@@ -253,17 +385,16 @@ function App() {
               <span className="metric-icon green-icon">✓</span>
             </div>
             <div className="metric-value">
-              {passRate}
-              <span className="value-unit">%</span>
+              {passRate === null ? "—" : passRate.toFixed(1)}
+              {passRate !== null && <span className="value-unit">%</span>}
             </div>
             <div className="metric-foot">
-              <span className="trend-up">↗ 2.4%</span>
-              <span>vs. previous period</span>
+              <span>Across loaded reports</span>
             </div>
             <div className="progress-track">
               <div
                 className="progress-fill pass-fill"
-                style={{ width: `${passRate}%` }}
+                style={{ width: `${passRate ?? 0}%` }}
               />
             </div>
           </article>
@@ -273,15 +404,18 @@ function App() {
               <span className="metric-label">FAILED TESTS</span>
               <span className="metric-icon red-icon">!</span>
             </div>
-            <div className="metric-value">{totalFailed}</div>
+            <div className="metric-value">{totalFailed.toLocaleString()}</div>
             <div className="metric-foot">
-              <span className="trend-down">↓ 8.3%</span>
-              <span>vs. previous period</span>
+              <span>Failures + errors</span>
             </div>
-            <div className="failure-strip" aria-label="27 failed tests">
+            <div className="failure-strip" aria-label={`${totalFailed} failed tests`}>
               {Array.from({ length: 24 }, (_, index) => (
                 <span
-                  className={index < 7 ? "failure-segment hot" : "failure-segment"}
+                  className={
+                    donutTotal > 0 && index < Math.round((totalFailed / donutTotal) * 24)
+                      ? "failure-segment hot"
+                      : "failure-segment"
+                  }
                   key={index}
                 />
               ))}
@@ -294,11 +428,10 @@ function App() {
               <span className="metric-icon blue-icon">◷</span>
             </div>
             <div className="metric-value">
-              1m 42s
+              {averageDuration === null ? "—" : formatDuration(averageDuration)}
             </div>
             <div className="metric-foot">
-              <span className="trend-up">↓ 6.1%</span>
-              <span>faster than before</span>
+              <span>Average per report</span>
             </div>
             <div className="duration-line" aria-hidden="true">
               <svg viewBox="0 0 220 34" preserveAspectRatio="none">
@@ -319,15 +452,15 @@ function App() {
             <div className="panel-header">
               <div>
                 <h2>Execution trends</h2>
-                <p>Test outcomes over time</p>
+                <p>Pass and fail ratios by imported report</p>
               </div>
               <div className="range-switcher" aria-label="Chart date range">
                 {["7 days", "30 days"].map((range) => (
                   <button
                     type="button"
                     key={range}
-                    className={activeRange === range ? "range-active" : ""}
-                    onClick={() => setActiveRange(range)}
+                    className={selectedRange === range ? "range-active" : ""}
+                    onClick={() => setSelectedRange(range)}
                   >
                     {range}
                   </button>
@@ -336,33 +469,31 @@ function App() {
             </div>
 
             <div className="chart-legend">
-              <span><i className="legend-dot passed-dot" /> Passed</span>
-              <span><i className="legend-dot failed-dot" /> Failed</span>
-              <span className="chart-note">Sample data · {activeRange}</span>
+              <span><i className="legend-dot passed-dot" /> Passed rate</span>
+              <span><i className="legend-dot failed-dot" /> Failed rate</span>
+              <span className="chart-note">
+                {chartPoints.length} report{chartPoints.length === 1 ? "" : "s"} shown
+              </span>
             </div>
 
             <div className="chart-area">
               <div className="y-axis">
-                <span>100</span>
-                <span>75</span>
-                <span>50</span>
-                <span>25</span>
-                <span>0</span>
+                <span>100%</span>
+                <span>75%</span>
+                <span>50%</span>
+                <span>25%</span>
+                <span>0%</span>
               </div>
               <div className="chart-plot">
                 <div className="chart-grid-lines" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                  <span />
-                  <span />
+                  <span /><span /><span /><span /><span />
                 </div>
                 <svg
                   className="trend-chart"
                   viewBox="0 0 700 220"
                   preserveAspectRatio="none"
                   role="img"
-                  aria-label="Sample chart showing passed tests trending upward and failed tests trending downward"
+                  aria-label="Pass and fail percentages for recent imported JUnit reports"
                 >
                   <defs>
                     <linearGradient id="passedFill" x1="0" y1="0" x2="0" y2="1">
@@ -370,62 +501,80 @@ function App() {
                       <stop offset="100%" stopColor="#9b76ff" stopOpacity="0" />
                     </linearGradient>
                   </defs>
-                  <path
-                    d="M0 72 L116 47 L233 64 L350 30 L466 39 L583 18 L700 11 L700 220 L0 220 Z"
-                    fill="url(#passedFill)"
-                  />
-                  <path
-                    d="M0 72 L116 47 L233 64 L350 30 L466 39 L583 18 L700 11"
-                    fill="none"
-                    stroke="#a78bfa"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    vectorEffect="non-scaling-stroke"
-                  />
-                  <path
-                    d="M0 165 L116 183 L233 155 L350 191 L466 175 L583 197 L700 204"
-                    fill="none"
-                    stroke="#fb7185"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeDasharray="5 6"
-                    vectorEffect="non-scaling-stroke"
-                  />
-                  {[0, 116, 233, 350, 466, 583, 700].map((x, index) => (
-                    <circle
-                      key={x}
-                      cx={x}
-                      cy={[72, 47, 64, 30, 39, 18, 11][index]}
-                      r="4"
-                      fill="#10091f"
-                      stroke="#b29aff"
-                      strokeWidth="2"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  ))}
+                  {chartPoints.length > 0 && (
+                    <>
+                      <path d={chartAreaPath(chartPoints)} fill="url(#passedFill)" />
+                      <path
+                        d={chartPath(chartPoints, "passedRate")}
+                        fill="none"
+                        stroke="#a78bfa"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <path
+                        d={chartPath(chartPoints, "failedRate")}
+                        fill="none"
+                        stroke="#fb7185"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeDasharray="5 6"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      {chartPoints.map((point, index) => {
+                        const x =
+                          chartPoints.length === 1
+                            ? 350
+                            : (index * 700) / (chartPoints.length - 1);
+                        const y = 205 - (point.passedRate / 100) * 180;
+                        return (
+                          <circle
+                            key={`${point.label}-${index}`}
+                            cx={x}
+                            cy={y}
+                            r="4"
+                            fill="#10091f"
+                            stroke="#b29aff"
+                            strokeWidth="2"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        );
+                      })}
+                    </>
+                  )}
                 </svg>
                 <div className="x-axis">
-                  {trend.map((point) => <span key={point.day}>{point.day}</span>)}
+                  {chartPoints.map((point, index) => (
+                    <span key={`${point.label}-${index}`}>{point.label}</span>
+                  ))}
                 </div>
               </div>
             </div>
+            {chartPoints.length === 0 && (
+              <p className="empty-state">
+                No reports in this period yet. Import a JUnit XML file to begin.
+              </p>
+            )}
           </article>
 
           <article className="panel health-panel" id="failures">
             <div className="panel-header">
               <div>
                 <h2>Suite health</h2>
-                <p>Current test distribution</p>
+                <p>Distribution across loaded reports</p>
               </div>
               <span className="health-menu">···</span>
             </div>
 
             <div className="health-visual">
-              <div className="donut-chart">
+              <div className="donut-chart" style={{ background: donutBackground }}>
                 <div className="donut-center">
-                  <strong>97.9<span>%</span></strong>
+                  <strong>
+                    {passRate === null ? "—" : passRate.toFixed(1)}
+                    {passRate !== null && <span>%</span>}
+                  </strong>
                   <small>Passing</small>
                 </div>
               </div>
@@ -433,24 +582,40 @@ function App() {
 
             <div className="health-stats">
               <div>
-                <span className="health-label"><i className="legend-dot passed-dot" /> Passed</span>
-                <strong>1,248</strong>
+                <span className="health-label">
+                  <i className="legend-dot passed-dot" /> Passed
+                </span>
+                <strong>{totals.passed.toLocaleString()}</strong>
               </div>
               <div>
-                <span className="health-label"><i className="legend-dot failed-dot" /> Failed</span>
-                <strong>27</strong>
+                <span className="health-label">
+                  <i className="legend-dot failed-dot" /> Failed
+                </span>
+                <strong>{totalFailed.toLocaleString()}</strong>
               </div>
               <div>
-                <span className="health-label"><i className="legend-dot skipped-dot" /> Skipped</span>
-                <strong>9</strong>
+                <span className="health-label">
+                  <i className="legend-dot skipped-dot" /> Skipped
+                </span>
+                <strong>{totals.skipped.toLocaleString()}</strong>
               </div>
             </div>
 
             <div className="health-footer">
               <span className="health-footer-icon">✳</span>
               <span>
-                <strong>Looking good</strong>
-                <small>Your pass rate is above the 95% target.</small>
+                <strong>
+                  {runs.length === 0
+                    ? "Ready for your first report"
+                    : passRate !== null && passRate >= 95
+                      ? "Pass rate above 95%"
+                      : "Review your test failures"}
+                </strong>
+                <small>
+                  {runs.length === 0
+                    ? "Import JUnit XML to see your quality metrics."
+                    : `${totals.tests.toLocaleString()} tests across ${totals.suites.toLocaleString()} suites.`}
+                </small>
               </span>
             </div>
           </article>
@@ -460,13 +625,13 @@ function App() {
           <div className="panel-header runs-header">
             <div>
               <h2>Recent test runs</h2>
-              <p>Your latest automated executions</p>
+              <p>Your latest saved JUnit reports</p>
             </div>
             <label className="search-box">
               <span>⌕</span>
               <input
                 type="search"
-                placeholder="Search runs..."
+                placeholder="Search reports..."
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 aria-label="Search test runs"
@@ -479,42 +644,61 @@ function App() {
               <thead>
                 <tr>
                   <th>RUN</th>
-                  <th>SUITE / BRANCH</th>
+                  <th>REPORT FILE</th>
                   <th>RESULTS</th>
                   <th>DURATION</th>
                   <th>STATUS</th>
                 </tr>
               </thead>
               <tbody>
-                {visibleRuns.map((run) => (
-                  <tr key={run.id}>
-                    <td className="run-id">{run.id}</td>
-                    <td>
-                      <div className="suite-name">{run.name}</div>
-                      <div className="branch-name">
-                        <span>⑂</span> {run.branch}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="result-counts">
-                        <span className="result-pass">✓ {run.passed}</span>
-                        <span className="result-fail">× {run.failed}</span>
-                        <span className="result-skip">– {run.skipped}</span>
-                      </div>
-                    </td>
-                    <td className="duration-cell">{run.duration}</td>
-                    <td>
-                      <span className={`run-status ${run.status.toLowerCase()}`}>
-                        <span className="status-dot" />
-                        {run.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {visibleRuns.length === 0 && (
+                {visibleRuns.map((run) => {
+                  const summary = run.summary;
+                  const failures = summary.failures + summary.errors;
+                  const status = failures > 0 ? "Failed" : "Passed";
+
+                  return (
+                    <tr key={run.id}>
+                      <td className="run-id">#{run.id}</td>
+                      <td>
+                        <div className="suite-name">{run.filename}</div>
+                        <div className="branch-name">
+                          <span>◷</span> {formatDate(run.created_at)}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="result-counts">
+                          <span className="result-pass">✓ {summary.passed}</span>
+                          <span className="result-fail">× {failures}</span>
+                          <span className="result-skip">– {summary.skipped}</span>
+                        </div>
+                      </td>
+                      <td className="duration-cell">
+                        {formatDuration(summary.duration_seconds)}
+                      </td>
+                      <td>
+                        <span className={`run-status ${status.toLowerCase()}`}>
+                          <span className="status-dot" />
+                          {status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {!isLoading && visibleRuns.length === 0 && (
                   <tr>
                     <td className="empty-state" colSpan={5}>
-                      No runs match “{query}”.
+                      {query
+                        ? `No reports match "${query}".`
+                        : "No saved reports yet. Import a JUnit XML report to get started."}
+                    </td>
+                  </tr>
+                )}
+
+                {isLoading && runs.length === 0 && (
+                  <tr>
+                    <td className="empty-state" colSpan={5}>
+                      Loading reports…
                     </td>
                   </tr>
                 )}
@@ -523,14 +707,26 @@ function App() {
           </div>
 
           <div className="table-footer">
-            <span>Showing {visibleRuns.length} of {runs.length} sample runs</span>
-            <a href="#overview">Back to overview ↑</a>
+            <span>
+              Showing {visibleRuns.length} of {runs.length} loaded reports
+            </span>
+            <button
+              type="button"
+              className="table-refresh"
+              onClick={() => void refreshRuns()}
+              disabled={isLoading}
+            >
+              Refresh ↻
+            </button>
           </div>
         </section>
 
         <footer className="page-footer">
-          <span><span className="footer-spark">✳</span> TestPulse <span>·</span> Built for better releases.</span>
-          <span>UI preview · Report API integration next</span>
+          <span>
+            <span className="footer-spark">✳</span> TestPulse
+            <span>·</span> Built for better releases.
+          </span>
+          <span>Live metrics · JUnit XML analytics</span>
         </footer>
       </main>
     </div>
