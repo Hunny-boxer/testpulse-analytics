@@ -1,5 +1,4 @@
-
-name: TestPulse Backend CI
+name: TestPulse CI
 
 on:
   push:
@@ -49,3 +48,26 @@ jobs:
           path: backend/test-results.xml
           if-no-files-found: ignore
           retention-days: 7
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check TypeScript and build frontend
+        run: npm run build
