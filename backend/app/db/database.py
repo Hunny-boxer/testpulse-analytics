@@ -1,97 +1,153 @@
 
-"""SQLite persistence for TestPulse test reports."""
+"""Portable SQLite and PostgreSQL persistence for TestPulse."""
 
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    select,
+)
+from sqlalchemy.engine import URL, Engine
 
 
 DEFAULT_DB_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "db.sqlite3"
 )
 
+metadata = MetaData()
 
-def _resolve_path(db_path: str | Path | None = None) -> Path:
-    """Resolve the database path and create its parent directory."""
+test_runs = Table(
+    "test_runs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("filename", String(255), nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("suite_count", Integer, nullable=False),
+    Column("total_tests", Integer, nullable=False),
+    Column("passed", Integer, nullable=False),
+    Column("failures", Integer, nullable=False),
+    Column("errors", Integer, nullable=False),
+    Column("skipped", Integer, nullable=False),
+    Column("duration_seconds", Float, nullable=False),
+)
+
+test_suites = Table(
+    "test_suites",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "run_id",
+        Integer,
+        ForeignKey("test_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("suite_name", String, nullable=False),
+    Column("total_tests", Integer, nullable=False),
+    Column("passed", Integer, nullable=False),
+    Column("failures", Integer, nullable=False),
+    Column("errors", Integer, nullable=False),
+    Column("skipped", Integer, nullable=False),
+    Column("duration_seconds", Float, nullable=False),
+)
+
+test_cases = Table(
+    "test_cases",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "run_id",
+        Integer,
+        ForeignKey("test_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("suite_name", String, nullable=False),
+    Column("class_name", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("duration_seconds", Float, nullable=False),
+    Column("message", Text, nullable=True),
+    CheckConstraint(
+        "status IN ('passed', 'failed', 'error', 'skipped')",
+        name="ck_test_cases_status",
+    ),
+)
+
+Index("idx_test_runs_created_at", test_runs.c.created_at)
+Index("idx_test_cases_run_status", test_cases.c.run_id, test_cases.c.status)
+
+
+def _create_engine(db_path: str | Path | None = None) -> Engine:
+    """Create an engine using an explicit path, database URL, or SQLite."""
+
+    # An explicit path or TESTPULSE_DB_PATH selects SQLite.
+    # This preserves isolated SQLite databases in the existing test suite.
     configured_path = db_path or os.getenv("TESTPULSE_DB_PATH")
-    path = Path(configured_path) if configured_path else DEFAULT_DB_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
 
+    if configured_path is not None:
+        path = Path(configured_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open a connection with row access and foreign keys enabled."""
-    connection = sqlite3.connect(_resolve_path(db_path))
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+        return create_engine(
+            URL.create("sqlite", database=str(path)),
+            connect_args={"check_same_thread": False},
+        )
+
+    database_url = (
+        os.getenv("TESTPULSE_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+    )
+
+    if database_url:
+        # Render and some database providers supply postgres:// URLs.
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace(
+                "postgres://",
+                "postgresql+psycopg://",
+                1,
+            )
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace(
+                "postgresql://",
+                "postgresql+psycopg://",
+                1,
+            )
+
+        return create_engine(database_url, pool_pre_ping=True)
+
+    # Local development fallback.
+    DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    return create_engine(
+        URL.create("sqlite", database=str(DEFAULT_DB_PATH)),
+        connect_args={"check_same_thread": False},
+    )
 
 
 def initialize_database(
     db_path: str | Path | None = None,
 ) -> None:
-    """Create the TestPulse tables when they do not already exist."""
-    connection = _connect(db_path)
+    """Create the report tables and indexes if they do not exist."""
+    engine = _create_engine(db_path)
 
     try:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS test_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                suite_count INTEGER NOT NULL,
-                total_tests INTEGER NOT NULL,
-                passed INTEGER NOT NULL,
-                failures INTEGER NOT NULL,
-                errors INTEGER NOT NULL,
-                skipped INTEGER NOT NULL,
-                duration_seconds REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS test_suites (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id INTEGER NOT NULL,
-                suite_name TEXT NOT NULL,
-                total_tests INTEGER NOT NULL,
-                passed INTEGER NOT NULL,
-                failures INTEGER NOT NULL,
-                errors INTEGER NOT NULL,
-                skipped INTEGER NOT NULL,
-                duration_seconds REAL NOT NULL,
-                FOREIGN KEY (run_id)
-                    REFERENCES test_runs(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS test_cases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id INTEGER NOT NULL,
-                suite_name TEXT NOT NULL,
-                class_name TEXT NOT NULL,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (
-                    status IN ('passed', 'failed', 'error', 'skipped')
-                ),
-                duration_seconds REAL NOT NULL,
-                message TEXT,
-                FOREIGN KEY (run_id)
-                    REFERENCES test_runs(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_test_runs_created_at
-                ON test_runs(created_at);
-
-            CREATE INDEX IF NOT EXISTS idx_test_cases_run_status
-                ON test_cases(run_id, status);
-            """
-        )
-        connection.commit()
+        metadata.create_all(engine)
     finally:
-        connection.close()
+        engine.dispose()
 
 
 def save_report(
@@ -99,82 +155,60 @@ def save_report(
     report: dict[str, Any],
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Persist a parsed report and return its new run identifier."""
+    """Persist a parsed report and return its run ID and creation time."""
     initialize_database(db_path)
 
     summary = report["summary"]
     created_at = datetime.now(timezone.utc).isoformat()
-
-    connection = _connect(db_path)
+    engine = _create_engine(db_path)
 
     try:
-        with connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO test_runs (
-                    filename, created_at, suite_count, total_tests,
-                    passed, failures, errors, skipped, duration_seconds
+        with engine.begin() as connection:
+            result = connection.execute(
+                test_runs.insert().values(
+                    filename=filename,
+                    created_at=created_at,
+                    suite_count=summary["suite_count"],
+                    total_tests=summary["total_tests"],
+                    passed=summary["passed"],
+                    failures=summary["failures"],
+                    errors=summary["errors"],
+                    skipped=summary["skipped"],
+                    duration_seconds=summary["duration_seconds"],
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    filename,
-                    created_at,
-                    summary["suite_count"],
-                    summary["total_tests"],
-                    summary["passed"],
-                    summary["failures"],
-                    summary["errors"],
-                    summary["skipped"],
-                    summary["duration_seconds"],
-                ),
             )
-            run_id = cursor.lastrowid
+            run_id = int(result.inserted_primary_key[0])
 
             for suite in report["test_suites"]:
                 connection.execute(
-                    """
-                    INSERT INTO test_suites (
-                        run_id, suite_name, total_tests, passed,
-                        failures, errors, skipped, duration_seconds
+                    test_suites.insert().values(
+                        run_id=run_id,
+                        suite_name=suite["name"],
+                        total_tests=suite["total_tests"],
+                        passed=suite["passed"],
+                        failures=suite["failures"],
+                        errors=suite["errors"],
+                        skipped=suite["skipped"],
+                        duration_seconds=suite["duration_seconds"],
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        suite["name"],
-                        suite["total_tests"],
-                        suite["passed"],
-                        suite["failures"],
-                        suite["errors"],
-                        suite["skipped"],
-                        suite["duration_seconds"],
-                    ),
                 )
 
             for case in report["test_cases"]:
                 connection.execute(
-                    """
-                    INSERT INTO test_cases (
-                        run_id, suite_name, class_name, name,
-                        status, duration_seconds, message
+                    test_cases.insert().values(
+                        run_id=run_id,
+                        suite_name=case["suite"],
+                        class_name=case["class_name"],
+                        name=case["name"],
+                        status=case["status"],
+                        duration_seconds=case["duration_seconds"],
+                        message=case["message"],
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        case["suite"],
-                        case["class_name"],
-                        case["name"],
-                        case["status"],
-                        case["duration_seconds"],
-                        case["message"],
-                    ),
                 )
 
         return {"id": run_id, "created_at": created_at}
     finally:
-        connection.close()
+        engine.dispose()
 
 
 def list_runs(
@@ -182,23 +216,70 @@ def list_runs(
     offset: int = 0,
     db_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent runs with their summary metrics."""
+    """Return recent test runs with their summary metrics."""
     initialize_database(db_path)
-    connection = _connect(db_path)
+    engine = _create_engine(db_path)
 
     try:
-        rows = connection.execute(
-            """
-            SELECT *
-            FROM test_runs
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
+        with engine.connect() as connection:
+            rows = connection.execute(
+                select(test_runs)
+                .order_by(test_runs.c.id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).mappings().all()
 
-        return [
-            {
+            return [
+                {
+                    "id": row["id"],
+                    "filename": row["filename"],
+                    "created_at": row["created_at"],
+                    "summary": {
+                        "suite_count": row["suite_count"],
+                        "total_tests": row["total_tests"],
+                        "passed": row["passed"],
+                        "failures": row["failures"],
+                        "errors": row["errors"],
+                        "skipped": row["skipped"],
+                        "duration_seconds": row["duration_seconds"],
+                    },
+                }
+                for row in rows
+            ]
+    finally:
+        engine.dispose()
+
+
+def get_run(
+    run_id: int,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Return a run with its suites and cases, or None if it is missing."""
+    initialize_database(db_path)
+    engine = _create_engine(db_path)
+
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                select(test_runs).where(test_runs.c.id == run_id)
+            ).mappings().first()
+
+            if row is None:
+                return None
+
+            suites = connection.execute(
+                select(test_suites)
+                .where(test_suites.c.run_id == run_id)
+                .order_by(test_suites.c.id)
+            ).mappings().all()
+
+            cases = connection.execute(
+                select(test_cases)
+                .where(test_cases.c.run_id == run_id)
+                .order_by(test_cases.c.id)
+            ).mappings().all()
+
+            return {
                 "id": row["id"],
                 "filename": row["filename"],
                 "created_at": row["created_at"],
@@ -211,88 +292,29 @@ def list_runs(
                     "skipped": row["skipped"],
                     "duration_seconds": row["duration_seconds"],
                 },
+                "test_suites": [
+                    {
+                        "name": suite["suite_name"],
+                        "total_tests": suite["total_tests"],
+                        "passed": suite["passed"],
+                        "failures": suite["failures"],
+                        "errors": suite["errors"],
+                        "skipped": suite["skipped"],
+                        "duration_seconds": suite["duration_seconds"],
+                    }
+                    for suite in suites
+                ],
+                "test_cases": [
+                    {
+                        "suite": case["suite_name"],
+                        "class_name": case["class_name"],
+                        "name": case["name"],
+                        "status": case["status"],
+                        "duration_seconds": case["duration_seconds"],
+                        "message": case["message"],
+                    }
+                    for case in cases
+                ],
             }
-            for row in rows
-        ]
     finally:
-        connection.close()
-
-
-def get_run(
-    run_id: int,
-    db_path: str | Path | None = None,
-) -> dict[str, Any] | None:
-    """Return one run and its suites and cases, or None if not found."""
-    initialize_database(db_path)
-    connection = _connect(db_path)
-
-    try:
-        row = connection.execute(
-            "SELECT * FROM test_runs WHERE id = ?",
-            (run_id,),
-        ).fetchone()
-
-        if row is None:
-            return None
-
-        suites = connection.execute(
-            """
-            SELECT suite_name, total_tests, passed, failures,
-                   errors, skipped, duration_seconds
-            FROM test_suites
-            WHERE run_id = ?
-            ORDER BY id
-            """,
-            (run_id,),
-        ).fetchall()
-
-        cases = connection.execute(
-            """
-            SELECT suite_name, class_name, name, status,
-                   duration_seconds, message
-            FROM test_cases
-            WHERE run_id = ?
-            ORDER BY id
-            """,
-            (run_id,),
-        ).fetchall()
-
-        return {
-            "id": row["id"],
-            "filename": row["filename"],
-            "created_at": row["created_at"],
-            "summary": {
-                "suite_count": row["suite_count"],
-                "total_tests": row["total_tests"],
-                "passed": row["passed"],
-                "failures": row["failures"],
-                "errors": row["errors"],
-                "skipped": row["skipped"],
-                "duration_seconds": row["duration_seconds"],
-            },
-            "test_suites": [
-                {
-                    "name": item["suite_name"],
-                    "total_tests": item["total_tests"],
-                    "passed": item["passed"],
-                    "failures": item["failures"],
-                    "errors": item["errors"],
-                    "skipped": item["skipped"],
-                    "duration_seconds": item["duration_seconds"],
-                }
-                for item in suites
-            ],
-            "test_cases": [
-                {
-                    "suite": item["suite_name"],
-                    "class_name": item["class_name"],
-                    "name": item["name"],
-                    "status": item["status"],
-                    "duration_seconds": item["duration_seconds"],
-                    "message": item["message"],
-                }
-                for item in cases
-            ],
-        }
-    finally:
-        connection.close()
+        engine.dispose()
