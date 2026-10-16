@@ -23,6 +23,7 @@ type FailureInsightsProps = {
   runs: TestRun[];
   isLoadingRuns: boolean;
   requested: boolean;
+  onSelectRun?: (runId: number) => void;
 };
 
 function formatDate(value: string): string {
@@ -51,6 +52,7 @@ export default function FailureInsights({
   runs,
   isLoadingRuns,
   requested,
+  onSelectRun,
 }: FailureInsightsProps) {
   const [detailsById, setDetailsById] = useState<Record<number, RunDetails>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -270,10 +272,33 @@ export default function FailureInsights({
                           );
                           if (!occurrence) return null;
 
+                          const chipLabel = `Run #${runId} · ${formatDate(occurrence.createdAt)}`;
+
+                          if (!onSelectRun) {
+                            return (
+                              <span className="failure-run-chip" key={runId}>
+                                {chipLabel}
+                              </span>
+                            );
+                          }
+
                           return (
-                            <span className="failure-run-chip" key={runId}>
-                              Run #{runId} · {formatDate(occurrence.createdAt)}
-                            </span>
+                            <button
+                              type="button"
+                              className="failure-run-chip failure-run-chip-button"
+                              key={runId}
+                              onClick={() => onSelectRun(runId)}
+                              aria-label={`Open test details for run ${runId}`}
+                              style={{
+                                appearance: "none",
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                                lineHeight: "inherit",
+                                textAlign: "left",
+                              }}
+                            >
+                              {chipLabel}
+                            </button>
                           );
                         })}
                         {group.runIds.length > 4 && (
