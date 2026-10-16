@@ -1,6 +1,7 @@
 
 """FastAPI application for TestPulse Analytics."""
 
+import logging
 import os
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -12,6 +13,9 @@ from app.services.junit_parser import (
     MAX_XML_BYTES,
     parse_junit_xml,
 )
+
+# Log detailed exceptions to the service logs, not to API responses.
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="TestPulse Analytics",
@@ -89,6 +93,7 @@ async def upload_junit_report(file: UploadFile = File(...)) -> dict:
     try:
         saved = save_report(filename[:255], report)
     except Exception as exc:
+        logger.exception("Database write failed while saving a JUnit report")
         raise HTTPException(
             status_code=500,
             detail="The report was parsed but could not be saved.",
@@ -111,6 +116,7 @@ def get_recent_runs(
     try:
         runs = list_runs(limit=limit, offset=offset)
     except Exception as exc:
+        logger.exception("Database query failed while retrieving test runs")
         raise HTTPException(
             status_code=500,
             detail="Could not retrieve test runs.",
@@ -136,6 +142,9 @@ def get_run_details(run_id: int) -> dict:
     try:
         run = get_run(run_id)
     except Exception as exc:
+        logger.exception(
+            "Database query failed while retrieving test run details"
+        )
         raise HTTPException(
             status_code=500,
             detail="Could not retrieve test run details.",
