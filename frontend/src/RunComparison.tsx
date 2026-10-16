@@ -8,6 +8,7 @@ type RunComparisonProps = {
 };
 
 type ChangeKind = "regressed" | "fixed" | "changed" | "added" | "removed" | "unchanged";
+type ComparisonFilter = "all" | "regressed" | "fixed" | "changed" | "added" | "removed";
 
 type ComparedCase = {
   key: string;
@@ -124,12 +125,14 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
   const [comparison, setComparison] = useState<ComparisonResult | null>(null);
   const [isComparing, setIsComparing] = useState(false);
   const [error, setError] = useState("");
+  const [activeFilter, setActiveFilter] = useState<ComparisonFilter>("all");
 
   useEffect(() => {
     if (sortedRuns.length === 0) {
       setBaselineRunId("");
       setComparedRunId("");
       setComparison(null);
+      setActiveFilter("all");
       return;
     }
 
@@ -155,6 +158,7 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
 
     setIsComparing(true);
     setError("");
+    setActiveFilter("all");
 
     try {
       const [baseline, compared] = await Promise.all([
@@ -186,6 +190,25 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
     };
   }, [comparison]);
 
+  const filteredCases = useMemo(() => {
+    const cases = comparison?.cases ?? [];
+    if (activeFilter === "all") return cases;
+    return cases.filter((item) => item.change === activeFilter);
+  }, [comparison, activeFilter]);
+
+  const filterOptions: Array<{
+    key: ComparisonFilter;
+    label: string;
+    count: number;
+  }> = [
+    { key: "all", label: "All", count: comparison?.cases.length ?? 0 },
+    { key: "regressed", label: "Regressions", count: changeCounts.regressions },
+    { key: "fixed", label: "Fixed", count: changeCounts.fixes },
+    { key: "changed", label: "Changed", count: changeCounts.changed },
+    { key: "added", label: "Added", count: changeCounts.added },
+    { key: "removed", label: "Removed", count: changeCounts.removed },
+  ];
+
   return (
     <section className="panel run-comparison-panel" id="run-comparison">
       <div className="panel-header comparison-header">
@@ -211,6 +234,7 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                 onChange={(event) => {
                   setBaselineRunId(event.target.value ? Number(event.target.value) : "");
                   setComparison(null);
+                  setActiveFilter("all");
                   setError("");
                 }}
                 disabled={isComparing || isLoadingRuns}
@@ -233,6 +257,7 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                 onChange={(event) => {
                   setComparedRunId(event.target.value ? Number(event.target.value) : "");
                   setComparison(null);
+                  setActiveFilter("all");
                   setError("");
                 }}
                 disabled={isComparing || isLoadingRuns}
@@ -287,40 +312,69 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
               <p>The selected JUnit reports do not contain comparable individual test cases.</p>
             </div>
           ) : (
-            <div className="comparison-table-wrap">
-              <table className="comparison-table">
-                <thead>
-                  <tr>
-                    <th>TEST</th>
-                    <th>BASELINE</th>
-                    <th>COMPARED</th>
-                    <th>CHANGE</th>
-                    <th>DETAIL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {comparison.cases.map((item) => (
-                    <tr key={item.key} className={`comparison-row ${item.change}`}>
-                      <td>
-                        <strong>{item.name}</strong>
-                        <small>{item.className}</small>
-                      </td>
-                      <td><RunStatus status={item.before?.status} /></td>
-                      <td><RunStatus status={item.after?.status} /></td>
-                      <td><span className={`comparison-change ${item.change}`}>{item.change}</span></td>
-                      <td>
-                        {item.change === "regressed" && (item.after?.message || "The test now fails or errors.")}
-                        {item.change === "fixed" && "Previously failing test now passes or skips."}
-                        {item.change === "changed" && (item.after?.message || "Test status or failure message changed.")}
-                        {item.change === "added" && "Test appears only in the compared run."}
-                        {item.change === "removed" && "Test appears only in the baseline run."}
-                        {item.change === "unchanged" && (isFailure(item.after?.status ?? "passed") ? item.after?.message || "Failure status unchanged." : "No status change.")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div
+                className="range-switcher comparison-filter-controls"
+                role="group"
+                aria-label="Filter comparison results"
+                style={{ flexWrap: "wrap", marginBottom: "14px" }}
+              >
+                {filterOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={option.key}
+                    className={activeFilter === option.key ? "range-active" : ""}
+                    aria-pressed={activeFilter === option.key}
+                    onClick={() => setActiveFilter(option.key)}
+                  >
+                    {option.label}
+                    <span style={{ marginLeft: "5px", opacity: 0.8 }}>{option.count}</span>
+                  </button>
+                ))}
+              </div>
+
+              {filteredCases.length === 0 ? (
+                <div className="insights-empty">
+                  <strong>No tests in this category</strong>
+                  <p>Choose All to display every test in this comparison.</p>
+                </div>
+              ) : (
+                <div className="comparison-table-wrap">
+                  <table className="comparison-table">
+                    <thead>
+                      <tr>
+                        <th>TEST</th>
+                        <th>BASELINE</th>
+                        <th>COMPARED</th>
+                        <th>CHANGE</th>
+                        <th>DETAIL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCases.map((item) => (
+                        <tr key={item.key} className={`comparison-row ${item.change}`}>
+                          <td>
+                            <strong>{item.name}</strong>
+                            <small>{item.className}</small>
+                          </td>
+                          <td><RunStatus status={item.before?.status} /></td>
+                          <td><RunStatus status={item.after?.status} /></td>
+                          <td><span className={`comparison-change ${item.change}`}>{item.change}</span></td>
+                          <td>
+                            {item.change === "regressed" && (item.after?.message || "The test now fails or errors.")}
+                            {item.change === "fixed" && "Previously failing test now passes or skips."}
+                            {item.change === "changed" && (item.after?.message || "Test status or failure message changed.")}
+                            {item.change === "added" && "Test appears only in the compared run."}
+                            {item.change === "removed" && "Test appears only in the baseline run."}
+                            {item.change === "unchanged" && (isFailure(item.after?.status ?? "passed") ? item.after?.message || "Failure status unchanged." : "No status change.")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
