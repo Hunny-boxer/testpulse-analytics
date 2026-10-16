@@ -1,7 +1,7 @@
 
-import { useEffect, useMemo, useState } from "react";
-import { getRuns, uploadReport } from "./api";
-import type { TestRun } from "./api";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { getRunDetails, getRuns, uploadReport } from "./api";
+import type { RunDetails, TestRun } from "./api";
 
 type ChartPoint = {
   label: string;
@@ -11,7 +11,7 @@ type ChartPoint = {
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof TypeError) {
-    return "Could not reach the API. Check that the backend is running at http://localhost:8000.";
+    return "Could not reach the API. Check your network connection and the backend service status.";
   }
 
   return error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -50,6 +50,14 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  // Expanded report details are loaded on demand and cached by run ID.
+  const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
+  const [runDetailsById, setRunDetailsById] = useState<
+    Record<number, RunDetails>
+  >({});
+  const [loadingRunId, setLoadingRunId] = useState<number | null>(null);
+  const [runDetailsError, setRunDetailsError] = useState("");
+
   async function refreshRuns() {
     setIsLoading(true);
     setError("");
@@ -62,6 +70,42 @@ function App() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function loadRunDetails(runId: number) {
+    setExpandedRunId(runId);
+    setRunDetailsError("");
+
+    if (runDetailsById[runId]) return;
+
+    setLoadingRunId(runId);
+
+    try {
+      const details = await getRunDetails(runId);
+
+      setRunDetailsById((current) => ({
+        ...current,
+        [runId]: details,
+      }));
+    } catch (err) {
+      setRunDetailsError(
+        err instanceof Error
+          ? err.message
+          : "Could not load test run details."
+      );
+    } finally {
+      setLoadingRunId((current) => (current === runId ? null : current));
+    }
+  }
+
+  function toggleRunDetails(runId: number) {
+    if (expandedRunId === runId) {
+      setExpandedRunId(null);
+      setRunDetailsError("");
+      return;
+    }
+
+    void loadRunDetails(runId);
   }
 
   useEffect(() => {
@@ -147,7 +191,8 @@ function App() {
 
     return points
       .map((point, index) => {
-        const x = points.length === 1 ? 350 : (index * 700) / (points.length - 1);
+        const x =
+          points.length === 1 ? 350 : (index * 700) / (points.length - 1);
         const y = 205 - (point[key] / 100) * 180;
         return `${index === 0 ? "M" : "L"}${x} ${y}`;
       })
@@ -183,9 +228,11 @@ function App() {
 
     try {
       const uploaded = await uploadReport(file);
+
       setNotice(
         `Imported ${uploaded.filename}: ${uploaded.summary.total_tests} tests saved as run #${uploaded.run_id}.`
       );
+
       await refreshRuns();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -216,6 +263,7 @@ function App() {
         </a>
 
         <div className="workspace-label">WORKSPACE</div>
+
         <div className="workspace-switcher">
           <span className="workspace-avatar">T</span>
           <span className="workspace-copy">
@@ -227,21 +275,25 @@ function App() {
 
         <nav className="side-nav" aria-label="Main navigation">
           <p className="nav-label">ANALYTICS</p>
+
           <a className="nav-item active" href="#overview">
             <span className="nav-icon">◫</span>
             Overview
             <span className="nav-indicator" />
           </a>
+
           <a className="nav-item" href="#recent-runs">
             <span className="nav-icon">◷</span>
             Test runs
           </a>
+
           <a className="nav-item" href="#failures">
             <span className="nav-icon">⊗</span>
             Failure insights
           </a>
 
           <p className="nav-label nav-label-spaced">MANAGE</p>
+
           <a className="nav-item" href="#reports">
             <span className="nav-icon">⇧</span>
             Import reports
@@ -258,6 +310,7 @@ function App() {
               {error ? "API needs attention" : "Report analytics"}
             </span>
           </div>
+
           <div className="profile">
             <div className="profile-avatar">TP</div>
             <div className="profile-copy">
@@ -276,11 +329,17 @@ function App() {
             <span className="breadcrumb-separator">/</span>
             <strong>Overview</strong>
           </div>
+
           <div className="topbar-actions">
             <span className="environment-badge">
               <span className="status-dot" />
-              {isLoading ? "Connecting..." : error ? "API offline" : "API connected"}
+              {isLoading
+                ? "Connecting..."
+                : error
+                  ? "API offline"
+                  : "API connected"}
             </span>
+
             <button
               className="icon-button"
               type="button"
@@ -300,9 +359,11 @@ function App() {
               <span className="eyebrow-line" />
               TEST EXECUTION INTELLIGENCE
             </div>
+
             <h1>
               Your quality, <span>at a glance.</span>
             </h1>
+
             <p>
               Track test health, catch regressions, and ship with confidence.
             </p>
@@ -356,19 +417,25 @@ function App() {
               <span className="metric-label">TOTAL TEST RUNS</span>
               <span className="metric-icon purple-icon">▤</span>
             </div>
+
             <div className="metric-value">
-              {isLoading && runs.length === 0 ? "…" : runs.length.toLocaleString()}
+              {isLoading && runs.length === 0
+                ? "…"
+                : runs.length.toLocaleString()}
             </div>
+
             <div className="metric-foot">
               <span>Saved reports</span>
               <span>· Latest 100 loaded</span>
             </div>
+
             <div className="mini-bars purple-bars" aria-hidden="true">
               {runs.slice(0, 12).reverse().map((run) => {
                 const rate =
                   run.summary.total_tests > 0
                     ? (run.summary.passed / run.summary.total_tests) * 100
                     : 0;
+
                 return (
                   <span
                     key={run.id}
@@ -384,13 +451,16 @@ function App() {
               <span className="metric-label">PASS RATE</span>
               <span className="metric-icon green-icon">✓</span>
             </div>
+
             <div className="metric-value">
               {passRate === null ? "—" : passRate.toFixed(1)}
               {passRate !== null && <span className="value-unit">%</span>}
             </div>
+
             <div className="metric-foot">
               <span>Across loaded reports</span>
             </div>
+
             <div className="progress-track">
               <div
                 className="progress-fill pass-fill"
@@ -404,15 +474,22 @@ function App() {
               <span className="metric-label">FAILED TESTS</span>
               <span className="metric-icon red-icon">!</span>
             </div>
+
             <div className="metric-value">{totalFailed.toLocaleString()}</div>
+
             <div className="metric-foot">
               <span>Failures + errors</span>
             </div>
-            <div className="failure-strip" aria-label={`${totalFailed} failed tests`}>
+
+            <div
+              className="failure-strip"
+              aria-label={`${totalFailed} failed tests`}
+            >
               {Array.from({ length: 24 }, (_, index) => (
                 <span
                   className={
-                    donutTotal > 0 && index < Math.round((totalFailed / donutTotal) * 24)
+                    donutTotal > 0 &&
+                    index < Math.round((totalFailed / donutTotal) * 24)
                       ? "failure-segment hot"
                       : "failure-segment"
                   }
@@ -427,12 +504,17 @@ function App() {
               <span className="metric-label">AVG. DURATION</span>
               <span className="metric-icon blue-icon">◷</span>
             </div>
+
             <div className="metric-value">
-              {averageDuration === null ? "—" : formatDuration(averageDuration)}
+              {averageDuration === null
+                ? "—"
+                : formatDuration(averageDuration)}
             </div>
+
             <div className="metric-foot">
               <span>Average per report</span>
             </div>
+
             <div className="duration-line" aria-hidden="true">
               <svg viewBox="0 0 220 34" preserveAspectRatio="none">
                 <path
@@ -454,6 +536,7 @@ function App() {
                 <h2>Execution trends</h2>
                 <p>Pass and fail ratios by imported report</p>
               </div>
+
               <div className="range-switcher" aria-label="Chart date range">
                 {["7 days", "30 days"].map((range) => (
                   <button
@@ -469,10 +552,15 @@ function App() {
             </div>
 
             <div className="chart-legend">
-              <span><i className="legend-dot passed-dot" /> Passed rate</span>
-              <span><i className="legend-dot failed-dot" /> Failed rate</span>
+              <span>
+                <i className="legend-dot passed-dot" /> Passed rate
+              </span>
+              <span>
+                <i className="legend-dot failed-dot" /> Failed rate
+              </span>
               <span className="chart-note">
-                {chartPoints.length} report{chartPoints.length === 1 ? "" : "s"} shown
+                {chartPoints.length} report
+                {chartPoints.length === 1 ? "" : "s"} shown
               </span>
             </div>
 
@@ -484,10 +572,16 @@ function App() {
                 <span>25%</span>
                 <span>0%</span>
               </div>
+
               <div className="chart-plot">
                 <div className="chart-grid-lines" aria-hidden="true">
-                  <span /><span /><span /><span /><span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
                 </div>
+
                 <svg
                   className="trend-chart"
                   viewBox="0 0 700 220"
@@ -496,14 +590,33 @@ function App() {
                   aria-label="Pass and fail percentages for recent imported JUnit reports"
                 >
                   <defs>
-                    <linearGradient id="passedFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#9b76ff" stopOpacity="0.27" />
-                      <stop offset="100%" stopColor="#9b76ff" stopOpacity="0" />
+                    <linearGradient
+                      id="passedFill"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop
+                        offset="0%"
+                        stopColor="#9b76ff"
+                        stopOpacity="0.27"
+                      />
+                      <stop
+                        offset="100%"
+                        stopColor="#9b76ff"
+                        stopOpacity="0"
+                      />
                     </linearGradient>
                   </defs>
+
                   {chartPoints.length > 0 && (
                     <>
-                      <path d={chartAreaPath(chartPoints)} fill="url(#passedFill)" />
+                      <path
+                        d={chartAreaPath(chartPoints)}
+                        fill="url(#passedFill)"
+                      />
+
                       <path
                         d={chartPath(chartPoints, "passedRate")}
                         fill="none"
@@ -513,6 +626,7 @@ function App() {
                         strokeLinejoin="round"
                         vectorEffect="non-scaling-stroke"
                       />
+
                       <path
                         d={chartPath(chartPoints, "failedRate")}
                         fill="none"
@@ -523,12 +637,14 @@ function App() {
                         strokeDasharray="5 6"
                         vectorEffect="non-scaling-stroke"
                       />
+
                       {chartPoints.map((point, index) => {
                         const x =
                           chartPoints.length === 1
                             ? 350
                             : (index * 700) / (chartPoints.length - 1);
                         const y = 205 - (point.passedRate / 100) * 180;
+
                         return (
                           <circle
                             key={`${point.label}-${index}`}
@@ -545,16 +661,21 @@ function App() {
                     </>
                   )}
                 </svg>
+
                 <div className="x-axis">
                   {chartPoints.map((point, index) => (
-                    <span key={`${point.label}-${index}`}>{point.label}</span>
+                    <span key={`${point.label}-${index}`}>
+                      {point.label}
+                    </span>
                   ))}
                 </div>
               </div>
             </div>
+
             {chartPoints.length === 0 && (
               <p className="empty-state">
-                No reports in this period yet. Import a JUnit XML file to begin.
+                No reports in this period yet. Import a JUnit XML file to
+                begin.
               </p>
             )}
           </article>
@@ -569,7 +690,10 @@ function App() {
             </div>
 
             <div className="health-visual">
-              <div className="donut-chart" style={{ background: donutBackground }}>
+              <div
+                className="donut-chart"
+                style={{ background: donutBackground }}
+              >
                 <div className="donut-center">
                   <strong>
                     {passRate === null ? "—" : passRate.toFixed(1)}
@@ -587,12 +711,14 @@ function App() {
                 </span>
                 <strong>{totals.passed.toLocaleString()}</strong>
               </div>
+
               <div>
                 <span className="health-label">
                   <i className="legend-dot failed-dot" /> Failed
                 </span>
                 <strong>{totalFailed.toLocaleString()}</strong>
               </div>
+
               <div>
                 <span className="health-label">
                   <i className="legend-dot skipped-dot" /> Skipped
@@ -627,6 +753,7 @@ function App() {
               <h2>Recent test runs</h2>
               <p>Your latest saved JUnit reports</p>
             </div>
+
             <label className="search-box">
               <span>⌕</span>
               <input
@@ -650,38 +777,219 @@ function App() {
                   <th>STATUS</th>
                 </tr>
               </thead>
+
               <tbody>
                 {visibleRuns.map((run) => {
                   const summary = run.summary;
                   const failures = summary.failures + summary.errors;
                   const status = failures > 0 ? "Failed" : "Passed";
+                  const expanded = expandedRunId === run.id;
+                  const details = runDetailsById[run.id];
 
                   return (
-                    <tr key={run.id}>
-                      <td className="run-id">#{run.id}</td>
-                      <td>
-                        <div className="suite-name">{run.filename}</div>
-                        <div className="branch-name">
-                          <span>◷</span> {formatDate(run.created_at)}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="result-counts">
-                          <span className="result-pass">✓ {summary.passed}</span>
-                          <span className="result-fail">× {failures}</span>
-                          <span className="result-skip">– {summary.skipped}</span>
-                        </div>
-                      </td>
-                      <td className="duration-cell">
-                        {formatDuration(summary.duration_seconds)}
-                      </td>
-                      <td>
-                        <span className={`run-status ${status.toLowerCase()}`}>
-                          <span className="status-dot" />
-                          {status}
-                        </span>
-                      </td>
-                    </tr>
+                    <Fragment key={run.id}>
+                      <tr>
+                        <td className="run-id">
+                          <button
+                            type="button"
+                            className="run-expand-button"
+                            aria-expanded={expanded}
+                            aria-label={`${expanded ? "Collapse" : "Expand"} details for run ${run.id}`}
+                            onClick={() => toggleRunDetails(run.id)}
+                          >
+                            <span>{expanded ? "⌄" : "›"}</span> #{run.id}
+                          </button>
+                        </td>
+
+                        <td>
+                          <button
+                            type="button"
+                            className="run-file-button"
+                            aria-expanded={expanded}
+                            onClick={() => toggleRunDetails(run.id)}
+                          >
+                            <span className="suite-name">{run.filename}</span>
+                            <span className="branch-name">
+                              <span>◷</span> {formatDate(run.created_at)}
+                            </span>
+                          </button>
+                        </td>
+
+                        <td>
+                          <div className="result-counts">
+                            <span className="result-pass">
+                              ✓ {summary.passed}
+                            </span>
+                            <span className="result-fail">
+                              × {failures}
+                            </span>
+                            <span className="result-skip">
+                              – {summary.skipped}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="duration-cell">
+                          {formatDuration(summary.duration_seconds)}
+                        </td>
+
+                        <td>
+                          <span
+                            className={`run-status ${status.toLowerCase()}`}
+                          >
+                            <span className="status-dot" />
+                            {status}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {expanded && (
+                        <tr className="run-details-row">
+                          <td colSpan={5}>
+                            <div className="run-details-panel">
+                              <div className="run-details-heading">
+                                <div>
+                                  <strong>Run #{run.id} details</strong>
+                                  <p>
+                                    {run.filename} ·{" "}
+                                    {formatDate(run.created_at)}
+                                  </p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  className="details-close-button"
+                                  onClick={() => {
+                                    setExpandedRunId(null);
+                                    setRunDetailsError("");
+                                  }}
+                                >
+                                  Close
+                                </button>
+                              </div>
+
+                              {loadingRunId === run.id && (
+                                <p className="details-state">
+                                  Loading test cases…
+                                </p>
+                              )}
+
+                              {runDetailsError &&
+                                expandedRunId === run.id && (
+                                  <div
+                                    className="details-error"
+                                    role="alert"
+                                  >
+                                    <span>{runDetailsError}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void loadRunDetails(run.id)
+                                      }
+                                    >
+                                      Retry
+                                    </button>
+                                  </div>
+                                )}
+
+                              {details && (
+                                <>
+                                  <div className="run-detail-summary">
+                                    <span>
+                                      <strong>
+                                        {details.summary.total_tests}
+                                      </strong>{" "}
+                                      tests
+                                    </span>
+                                    <span className="result-pass">
+                                      <strong>
+                                        {details.summary.passed}
+                                      </strong>{" "}
+                                      passed
+                                    </span>
+                                    <span className="result-fail">
+                                      <strong>
+                                        {details.summary.failures}
+                                      </strong>{" "}
+                                      failed
+                                    </span>
+                                    <span className="result-fail">
+                                      <strong>
+                                        {details.summary.errors}
+                                      </strong>{" "}
+                                      errors
+                                    </span>
+                                    <span className="result-skip">
+                                      <strong>
+                                        {details.summary.skipped}
+                                      </strong>{" "}
+                                      skipped
+                                    </span>
+                                    <span>
+                                      <strong>
+                                        {formatDuration(
+                                          details.summary.duration_seconds
+                                        )}
+                                      </strong>{" "}
+                                      duration
+                                    </span>
+                                  </div>
+
+                                  <div className="test-case-list">
+                                    {details.test_cases.map(
+                                      (testCase, index) => (
+                                        <article
+                                          className="test-case-card"
+                                          key={`${run.id}-${testCase.name}-${index}`}
+                                        >
+                                          <div className="test-case-main">
+                                            <span
+                                              className={`case-status ${testCase.status}`}
+                                            >
+                                              {testCase.status}
+                                            </span>
+
+                                            <div className="test-case-title">
+                                              <strong>
+                                                {testCase.name}
+                                              </strong>
+                                              <small>
+                                                {testCase.class_name}
+                                              </small>
+                                            </div>
+
+                                            <span className="case-duration">
+                                              {formatDuration(
+                                                testCase.duration_seconds
+                                              )}
+                                            </span>
+                                          </div>
+
+                                          {testCase.message && (
+                                            <p
+                                              className={`case-message ${testCase.status}`}
+                                            >
+                                              {testCase.message}
+                                            </p>
+                                          )}
+                                        </article>
+                                      )
+                                    )}
+
+                                    {details.test_cases.length === 0 && (
+                                      <p className="details-state">
+                                        No individual test cases were included
+                                        in this report.
+                                      </p>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
 
@@ -710,6 +1018,7 @@ function App() {
             <span>
               Showing {visibleRuns.length} of {runs.length} loaded reports
             </span>
+
             <button
               type="button"
               className="table-refresh"
