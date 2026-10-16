@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { getRunDetails, getRuns, uploadReport } from "./api";
 import FailureInsights from "./FailureInsights";
+import RunComparison from "./RunComparison";
 import type { RunDetails, TestRun } from "./api";
 
 type ChartPoint = {
@@ -107,12 +108,10 @@ function App() {
   }
 
   function handleSelectFailureRun(runId: number) {
-    // Clear any search filter so the selected run remains visible in the table.
     setQuery("");
     setActiveNav("recent-runs");
     void loadRunDetails(runId);
 
-    // Bring the selected run table into view from the Failure Insights section.
     document.getElementById("recent-runs")?.scrollIntoView({
       behavior: "smooth",
       block: "start",
@@ -289,6 +288,7 @@ function App() {
 
         <nav className="side-nav" aria-label="Main navigation">
           <p className="nav-label">ANALYTICS</p>
+
           <a
             className={`nav-item ${activeNav === "overview" ? "active" : ""}`}
             href="#overview"
@@ -298,6 +298,7 @@ function App() {
             Overview
             <span className="nav-indicator" />
           </a>
+
           <a
             className={`nav-item ${activeNav === "recent-runs" ? "active" : ""}`}
             href="#recent-runs"
@@ -306,6 +307,16 @@ function App() {
             <span className="nav-icon">◷</span>
             Test runs
           </a>
+
+          <a
+            className={`nav-item ${activeNav === "comparison" ? "active" : ""}`}
+            href="#run-comparison"
+            onClick={() => setActiveNav("comparison")}
+          >
+            <span className="nav-icon">⇄</span>
+            Compare runs
+          </a>
+
           <a
             className={`nav-item ${activeNav === "failures" ? "active" : ""}`}
             href="#failures"
@@ -319,6 +330,7 @@ function App() {
           </a>
 
           <p className="nav-label nav-label-spaced">MANAGE</p>
+
           <a
             className={`nav-item ${activeNav === "reports" ? "active" : ""}`}
             href="#reports"
@@ -906,6 +918,8 @@ function App() {
             </button>
           </div>
         </section>
+
+        <RunComparison runs={runs} isLoadingRuns={isLoading} />
 
         <FailureInsights
           runs={runs}
