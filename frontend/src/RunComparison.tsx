@@ -190,11 +190,11 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
     };
   }, [comparison]);
 
-  const filteredCases = useMemo(() => {
-    const cases = comparison?.cases ?? [];
-    if (activeFilter === "all") return cases;
-    return cases.filter((item) => item.change === activeFilter);
-  }, [comparison, activeFilter]);
+  const allCases = comparison?.cases ?? [];
+  const filteredCases =
+    activeFilter === "all"
+      ? allCases
+      : allCases.filter((item) => item.change === activeFilter);
 
   const filterOptions: Array<{
     key: ComparisonFilter;
@@ -317,7 +317,16 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                 className="range-switcher comparison-filter-controls"
                 role="group"
                 aria-label="Filter comparison results"
-                style={{ flexWrap: "wrap", marginBottom: "14px" }}
+                style={{
+                  position: "relative",
+                  zIndex: 50,
+                  isolation: "isolate",
+                  pointerEvents: "auto",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "3px",
+                  marginBottom: "14px",
+                }}
               >
                 {filterOptions.map((option) => (
                   <button
@@ -325,13 +334,38 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                     key={option.key}
                     className={activeFilter === option.key ? "range-active" : ""}
                     aria-pressed={activeFilter === option.key}
-                    onClick={() => setActiveFilter(option.key)}
+                    title={`Show ${option.label.toLowerCase()} test cases`}
+                    onPointerDown={() => setActiveFilter(option.key)}
+                    onMouseDown={() => setActiveFilter(option.key)}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setActiveFilter(option.key);
+                    }}
+                    style={{
+                      position: "relative",
+                      zIndex: 51,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      minHeight: "28px",
+                      padding: "6px 9px",
+                      cursor: "pointer",
+                      pointerEvents: "auto",
+                      touchAction: "manipulation",
+                      userSelect: "none",
+                    }}
                   >
                     {option.label}
                     <span style={{ marginLeft: "5px", opacity: 0.8 }}>{option.count}</span>
                   </button>
                 ))}
               </div>
+
+              <p className="details-state comparison-filter-status" role="status" aria-live="polite">
+                Showing {filteredCases.length} of {allCases.length} test cases
+                {activeFilter !== "all" ? ` · Filter: ${filterOptions.find((option) => option.key === activeFilter)?.label ?? activeFilter}` : ""}
+              </p>
 
               {filteredCases.length === 0 ? (
                 <div className="insights-empty">
