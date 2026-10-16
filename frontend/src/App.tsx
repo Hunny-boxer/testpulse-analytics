@@ -122,6 +122,42 @@ function App() {
     void refreshRuns();
   }, []);
 
+  // Keep the active sidebar item synchronized with the section being viewed.
+  useEffect(() => {
+    const navigationTargets = [
+      { id: "recent-runs", navigation: "recent-runs" },
+      { id: "run-comparison", navigation: "comparison" },
+      { id: "failures", navigation: "failures" },
+    ] as const;
+
+    const syncActiveNavigation = () => {
+      const activationLine = 180;
+      let nextActiveNavigation: string = "overview";
+
+      for (const target of navigationTargets) {
+        const section = document.getElementById(target.id);
+
+        if (section && section.getBoundingClientRect().top <= activationLine) {
+          nextActiveNavigation = target.navigation;
+        }
+      }
+
+      setActiveNav((current) =>
+        current === nextActiveNavigation ? current : nextActiveNavigation
+      );
+    };
+
+    syncActiveNavigation();
+
+    window.addEventListener("scroll", syncActiveNavigation, { passive: true });
+    window.addEventListener("resize", syncActiveNavigation);
+
+    return () => {
+      window.removeEventListener("scroll", syncActiveNavigation);
+      window.removeEventListener("resize", syncActiveNavigation);
+    };
+  }, []);
+
   const totals = useMemo(() => {
     return runs.reduce(
       (acc, run) => {
