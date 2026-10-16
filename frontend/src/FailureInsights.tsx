@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getRunDetails } from "./api";
-import type { RunDetails, TestRun } from "./api";
+import type { RunDetails, TestCaseStatus, TestRun } from "./api";
 
-type FailureOccurrence = {
+type TestObservation = {
   runId: number;
   filename: string;
   createdAt: string;
-  status: "failed" | "error";
+  status: TestCaseStatus;
   message: string | null;
+};
+
+type FailureOccurrence = TestObservation & {
+  status: "failed" | "error";
 };
 
 type FailureGroup = {
@@ -17,6 +21,16 @@ type FailureGroup = {
   occurrences: FailureOccurrence[];
   runIds: number[];
   latest: FailureOccurrence;
+};
+
+type FlakyTestGroup = {
+  key: string;
+  name: string;
+  className: string;
+  observations: TestObservation[];
+  passedRunIds: number[];
+  failedRunIds: number[];
+  latest: TestObservation;
 };
 
 type FailureInsightsProps = {
@@ -88,6 +102,94 @@ export default function FailureInsights({
     }
   }, [requested, hasAnalyzed, isLoadingRuns, analyze]);
 
+  const allTestGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        name: string;
+        className: string;
+        observations: TestObservation[];
+      }
+    >();
+
+    for (const run of runs) {
+      const details = detailsById[run.id];
+      if (!details) continue;
+
+      for (const testCase of details.test_cases) {
+        const className = testCase.class_name || "Unknown test class";
+        const key = `${className.toLowerCase()}::${testCase.name.toLowerCase()}`;
+        const group = groups.get(key) ?? {
+          key,
+          name: testCase.name,
+          className,
+          observations: [],
+        };
+
+        group.observations.push({
+          runId: run.id,
+          filename: run.filename,
+          createdAt: run.created_at,
+          status: testCase.status,
+          message: testCase.message,
+        });
+        groups.set(key, group);
+      }
+    }
+
+    return Array.from(groups.values()).map((group) => {
+      const observations = [...group.observations].sort(
+        (left, right) =>
+          new Date(right.createdAt).getTime() -
+          new Date(left.createdAt).getTime()
+      );
+      return { ...group, observations, latest: observations[0] };
+    });
+  }, [runs, detailsById]);
+
+  const flakyGroups = useMemo<FlakyTestGroup[]>(() => {
+    return allTestGroups
+      .map((group) => {
+        const passedRunIds = Array.from(
+          new Set(
+            group.observations
+              .filter((item) => item.status === "passed")
+              .map((item) => item.runId)
+          )
+        );
+        const failedRunIds = Array.from(
+          new Set(
+            group.observations
+              .filter((item) => item.status === "failed" || item.status === "error")
+              .map((item) => item.runId)
+          )
+        );
+
+        return {
+          ...group,
+          passedRunIds,
+          failedRunIds,
+        };
+      })
+      // A test is considered flaky only when it passes in one saved run and
+      // fails/errors in a different saved run, not when states conflict only
+      // within a single report.
+      .filter((group) =>
+        group.passedRunIds.some((passedId) =>
+          group.failedRunIds.some((failedId) => failedId !== passedId)
+        )
+      )
+      .sort(
+        (left, right) =>
+          right.failedRunIds.length + right.passedRunIds.length -
+            (left.failedRunIds.length + left.passedRunIds.length) ||
+          new Date(right.latest.createdAt).getTime() -
+            new Date(left.latest.createdAt).getTime() ||
+          left.name.localeCompare(right.name)
+      );
+  }, [allTestGroups]);
+
   const failureGroups = useMemo<FailureGroup[]>(() => {
     const groups = new Map<
       string,
@@ -99,32 +201,24 @@ export default function FailureInsights({
       }
     >();
 
-    for (const run of runs) {
-      const details = detailsById[run.id];
-      if (!details) continue;
-
-      for (const testCase of details.test_cases) {
-        if (testCase.status !== "failed" && testCase.status !== "error") {
+    for (const group of allTestGroups) {
+      for (const observation of group.observations) {
+        if (observation.status !== "failed" && observation.status !== "error") {
           continue;
         }
 
-        const className = testCase.class_name || "Unknown test class";
-        const key = `${className.toLowerCase()}::${testCase.name.toLowerCase()}`;
-        const group = groups.get(key) ?? {
-          key,
-          name: testCase.name,
-          className,
+        const occurrence: FailureOccurrence = {
+          ...observation,
+          status: observation.status,
+        };
+        const existing = groups.get(group.key) ?? {
+          key: group.key,
+          name: group.name,
+          className: group.className,
           occurrences: [],
         };
-
-        group.occurrences.push({
-          runId: run.id,
-          filename: run.filename,
-          createdAt: run.created_at,
-          status: testCase.status,
-          message: testCase.message,
-        });
-        groups.set(key, group);
+        existing.occurrences.push(occurrence);
+        groups.set(group.key, existing);
       }
     }
 
@@ -150,7 +244,7 @@ export default function FailureInsights({
             new Date(left.latest.createdAt).getTime() ||
           left.name.localeCompare(right.name)
       );
-  }, [runs, detailsById]);
+  }, [allTestGroups]);
 
   const occurrenceCount = failureGroups.reduce(
     (count, group) => count + group.occurrences.length,
@@ -159,6 +253,36 @@ export default function FailureInsights({
   const affectedRunCount = new Set(
     failureGroups.flatMap((group) => group.runIds)
   ).size;
+
+  function renderRunChip(runId: number, label: string, statusClass?: string) {
+    const className = `failure-run-chip${statusClass ? ` ${statusClass}` : ""}`;
+    if (!onSelectRun) {
+      return (
+        <span className={className} key={`${runId}-${label}`}>
+          {label}
+        </span>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        className={`${className} failure-run-chip-button`}
+        key={`${runId}-${label}`}
+        onClick={() => onSelectRun(runId)}
+        aria-label={`Open test details for run ${runId}`}
+        style={{
+          appearance: "none",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          lineHeight: "inherit",
+          textAlign: "left",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
 
   return (
     <section className="panel failure-insights-panel" id="failures">
@@ -199,10 +323,10 @@ export default function FailureInsights({
 
       {!hasAnalyzed && !isAnalyzing && (
         <div className="insights-empty">
-          <strong>Find recurring failures</strong>
+          <strong>Find recurring failures and flaky tests</strong>
           <p>
-            Open Failure insights to analyze saved reports, group repeated test
-            failures, and review their latest error messages.
+            Analyze your saved reports to group repeated failures and detect
+            tests that pass in one run but fail in another.
           </p>
         </div>
       )}
@@ -229,6 +353,90 @@ export default function FailureInsights({
                   <span>Failure occurrences</span>
                   <strong>{occurrenceCount.toLocaleString()}</strong>
                 </div>
+              </div>
+
+              <section className="flaky-tests-section" aria-labelledby="flaky-tests-heading">
+                <div className="flaky-tests-header">
+                  <div>
+                    <h3 id="flaky-tests-heading">Flaky test detection</h3>
+                    <p>Tests that passed in one report and failed in another</p>
+                  </div>
+                  <span className="flaky-count">
+                    {flakyGroups.length} detected
+                  </span>
+                </div>
+
+                {flakyGroups.length === 0 ? (
+                  <div className="insights-empty flaky-empty">
+                    <strong>No flaky tests detected</strong>
+                    <p>
+                      No test has both a passing result and a failed or errored
+                      result across different saved reports. Refresh insights
+                      after importing new runs to check again.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flaky-test-list">
+                    {flakyGroups.map((group) => {
+                      const runIds = Array.from(
+                        new Set([...group.passedRunIds, ...group.failedRunIds])
+                      );
+                      const runsToShow = runIds.slice(0, 4);
+
+                      return (
+                        <article className="flaky-test-card" key={group.key}>
+                          <div className="flaky-test-top">
+                            <div className="flaky-test-identity">
+                              <span className="flaky-status-badge">Flaky</span>
+                              <div>
+                                <strong>{group.name}</strong>
+                                <small>{group.className}</small>
+                              </div>
+                            </div>
+                            <span className="flaky-outcome-count">
+                              {group.passedRunIds.length} passed · {group.failedRunIds.length} failed
+                            </span>
+                          </div>
+
+                          <p className="flaky-test-message">
+                            {group.latest.message ||
+                              "This test has inconsistent results across saved runs."}
+                          </p>
+
+                          <div className="flaky-run-list">
+                            <strong>Run history:</strong>
+                            {runsToShow.map((runId) => {
+                              const observation = group.observations.find(
+                                (item) => item.runId === runId
+                              );
+                              if (!observation) return null;
+
+                              return renderRunChip(
+                                runId,
+                                `Run #${runId} · ${observation.status} · ${formatDate(observation.createdAt)}`,
+                                observation.status === "passed"
+                                  ? "flaky-run-passed"
+                                  : observation.status === "failed" || observation.status === "error"
+                                    ? "flaky-run-failed"
+                                    : "flaky-run-other"
+                              );
+                            })}
+                            {runIds.length > 4 && (
+                              <span className="failure-run-chip">
+                                +{runIds.length - 4} more
+                              </span>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <div className="failure-list-heading">
+                <h3>Recurring failures</h3>
+                <p>Failures grouped by test class and name</p>
               </div>
 
               {failureGroups.length === 0 ? (
@@ -271,34 +479,9 @@ export default function FailureInsights({
                             (item) => item.runId === runId
                           );
                           if (!occurrence) return null;
-
-                          const chipLabel = `Run #${runId} · ${formatDate(occurrence.createdAt)}`;
-
-                          if (!onSelectRun) {
-                            return (
-                              <span className="failure-run-chip" key={runId}>
-                                {chipLabel}
-                              </span>
-                            );
-                          }
-
-                          return (
-                            <button
-                              type="button"
-                              className="failure-run-chip failure-run-chip-button"
-                              key={runId}
-                              onClick={() => onSelectRun(runId)}
-                              aria-label={`Open test details for run ${runId}`}
-                              style={{
-                                appearance: "none",
-                                cursor: "pointer",
-                                fontFamily: "inherit",
-                                lineHeight: "inherit",
-                                textAlign: "left",
-                              }}
-                            >
-                              {chipLabel}
-                            </button>
+                          return renderRunChip(
+                            runId,
+                            `Run #${runId} · ${formatDate(occurrence.createdAt)}`
                           );
                         })}
                         {group.runIds.length > 4 && (
