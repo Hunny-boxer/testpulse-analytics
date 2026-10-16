@@ -106,6 +106,19 @@ function App() {
     void loadRunDetails(runId);
   }
 
+  function handleSelectFailureRun(runId: number) {
+    // Clear any search filter so the selected run remains visible in the table.
+    setQuery("");
+    setActiveNav("recent-runs");
+    void loadRunDetails(runId);
+
+    // Bring the selected run table into view from the Failure Insights section.
+    document.getElementById("recent-runs")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   useEffect(() => {
     void refreshRuns();
   }, []);
@@ -898,6 +911,7 @@ function App() {
           runs={runs}
           isLoadingRuns={isLoading}
           requested={insightsRequested}
+          onSelectRun={handleSelectFailureRun}
         />
 
         <footer className="page-footer">
