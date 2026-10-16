@@ -2135,3 +2135,198 @@ p {
     margin-left: 62px;
   }
 }
+
+/* Flaky Test Detection */
+.flaky-tests-section {
+  margin: 18px 0 22px;
+  padding: 15px;
+  border: 1px solid rgba(167, 139, 250, 0.15);
+  border-radius: 10px;
+  background: rgba(167, 139, 250, 0.025);
+}
+
+.flaky-tests-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.flaky-tests-header h3,
+.failure-list-heading h3 {
+  margin: 0 0 5px;
+  color: #e8e0f5;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.flaky-tests-header p,
+.failure-list-heading p {
+  margin: 0;
+  color: #9387a6;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.flaky-count {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.07);
+  color: #f3d58b;
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.flaky-test-list {
+  display: grid;
+  gap: 9px;
+}
+
+.flaky-test-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid rgba(251, 191, 36, 0.16);
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.025);
+}
+
+.flaky-test-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flaky-test-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.flaky-test-identity > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.flaky-test-identity strong {
+  color: #eee8f9;
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.flaky-test-identity small {
+  color: #8c819f;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.flaky-status-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 5px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #f3d58b;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.flaky-outcome-count {
+  flex-shrink: 0;
+  color: #c8b68a;
+  font-size: 9px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.flaky-test-message {
+  margin: 11px 0;
+  padding: 9px 11px;
+  border-left: 2px solid rgba(251, 191, 36, 0.45);
+  border-radius: 0 5px 5px 0;
+  background: rgba(251, 191, 36, 0.045);
+  color: #d6c49b;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.flaky-run-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: #978da8;
+  font-size: 9px;
+}
+
+.flaky-run-list > strong {
+  color: #b8aec9;
+  font-weight: 600;
+}
+
+.flaky-run-list .failure-run-chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.flaky-run-list .flaky-run-passed {
+  border-color: rgba(85, 214, 166, 0.2);
+  background: rgba(85, 214, 166, 0.045);
+  color: #85dfbd;
+}
+
+.flaky-run-list .flaky-run-failed {
+  border-color: rgba(251, 113, 133, 0.22);
+  background: rgba(251, 113, 133, 0.045);
+  color: #ff9ba9;
+}
+
+.flaky-run-list .flaky-run-other {
+  color: #9e95ad;
+}
+
+.flaky-run-list .failure-run-chip-button:hover {
+  border-color: rgba(167, 139, 250, 0.4);
+  filter: brightness(1.12);
+}
+
+.failure-list-heading {
+  margin: 18px 0 12px;
+}
+
+.flaky-empty {
+  padding: 17px 12px;
+}
+
+@media (max-width: 640px) {
+  .flaky-tests-section {
+    padding: 12px;
+  }
+
+  .flaky-tests-header {
+    align-items: flex-start;
+  }
+
+  .flaky-test-card {
+    padding: 10px;
+  }
+
+  .flaky-test-top {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .flaky-outcome-count {
+    margin-left: 57px;
+    text-align: left;
+  }
+}
