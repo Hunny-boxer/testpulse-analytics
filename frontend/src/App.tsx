@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { getRunDetails, getRuns, uploadReport } from "./api";
 import FailureInsights from "./FailureInsights";
+import QualityTrends from "./QualityTrends";
 import RunComparison from "./RunComparison";
 import type { RunDetails, TestRun } from "./api";
 
@@ -126,6 +127,7 @@ function App() {
   useEffect(() => {
     const navigationTargets = [
       { id: "recent-runs", navigation: "recent-runs" },
+      { id: "quality-trends", navigation: "quality-trends" },
       { id: "run-comparison", navigation: "comparison" },
       { id: "failures", navigation: "failures" },
     ] as const;
@@ -342,6 +344,15 @@ function App() {
           >
             <span className="nav-icon">◷</span>
             Test runs
+          </a>
+
+          <a
+            className={`nav-item ${activeNav === "quality-trends" ? "active" : ""}`}
+            href="#quality-trends"
+            onClick={() => setActiveNav("quality-trends")}
+          >
+            <span className="nav-icon">⌁</span>
+            Quality trends
           </a>
 
           <a
@@ -954,6 +965,9 @@ function App() {
             </button>
           </div>
         </section>
+
+        {/* New quality trends dashboard */}
+        <QualityTrends runs={runs} />
 
         <RunComparison runs={runs} isLoadingRuns={isLoading} />
 
