@@ -110,6 +110,36 @@ function statusLabel(status: TestCaseStatus | undefined): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function csvCell(value: string | number | null | undefined): string {
+  const text = value == null ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function statusForCsv(testCase: TestCaseDetails | null): string {
+  return testCase ? statusLabel(testCase.status) : "Not present";
+}
+
+function changeDetail(item: ComparedCase): string {
+  switch (item.change) {
+    case "regressed":
+      return item.after?.message || "The test now fails or errors.";
+    case "fixed":
+      return "Previously failing test now passes or skips.";
+    case "changed":
+      return item.after?.message || "Test status or failure message changed.";
+    case "added":
+      return "Test appears only in the compared run.";
+    case "removed":
+      return "Test appears only in the baseline run.";
+    case "unchanged":
+      return isFailure(item.after?.status ?? "passed")
+        ? item.after?.message || "Failure status unchanged."
+        : "No status change.";
+  }
+
+  return "No status change.";
+}
+
 function RunStatus({ status }: { status: TestCaseStatus | undefined }) {
   if (!status) return <span className="comparison-status missing">Not present</span>;
   return <span className={`comparison-status ${status}`}>{statusLabel(status)}</span>;
@@ -126,6 +156,7 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
   const [isComparing, setIsComparing] = useState(false);
   const [error, setError] = useState("");
   const [activeFilter, setActiveFilter] = useState<ComparisonFilter>("all");
+  const [exportNotice, setExportNotice] = useState("");
 
   useEffect(() => {
     if (sortedRuns.length === 0) {
@@ -195,6 +226,58 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
     activeFilter === "all"
       ? allCases
       : allCases.filter((item) => item.change === activeFilter);
+
+  function handleExportCsv() {
+    if (!comparison || filteredCases.length === 0) return;
+
+    const headers = [
+      "Baseline Run ID",
+      "Baseline Filename",
+      "Baseline Created At",
+      "Compared Run ID",
+      "Compared Filename",
+      "Compared Created At",
+      "Test Class",
+      "Test Name",
+      "Baseline Status",
+      "Compared Status",
+      "Change",
+      "Detail",
+    ];
+
+    const rows = filteredCases.map((item) => [
+      comparison.baseline.id,
+      comparison.baseline.filename,
+      comparison.baseline.created_at,
+      comparison.compared.id,
+      comparison.compared.filename,
+      comparison.compared.created_at,
+      item.className,
+      item.name,
+      statusForCsv(item.before),
+      statusForCsv(item.after),
+      item.change,
+      changeDetail(item),
+    ]);
+
+    const csv = "\uFEFF" + [headers, ...rows]
+      .map((row) => row.map(csvCell).join(","))
+      .join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `testpulse-comparison-run-${comparison.baseline.id}-vs-run-${comparison.compared.id}-${activeFilter}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    setExportNotice(
+      `Exported ${filteredCases.length} test case${filteredCases.length === 1 ? "" : "s"} to CSV.`
+    );
+  }
 
   const filterOptions: Array<{
     key: ComparisonFilter;
@@ -314,58 +397,92 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
           ) : (
             <>
               <div
-                className="range-switcher comparison-filter-controls"
-                role="group"
-                aria-label="Filter comparison results"
+                className="comparison-results-toolbar"
                 style={{
                   position: "relative",
                   zIndex: 50,
-                  isolation: "isolate",
-                  pointerEvents: "auto",
                   display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
                   flexWrap: "wrap",
-                  gap: "3px",
+                  gap: "10px",
                   marginBottom: "14px",
                 }}
               >
-                {filterOptions.map((option) => (
-                  <button
-                    type="button"
-                    key={option.key}
-                    className={activeFilter === option.key ? "range-active" : ""}
-                    aria-pressed={activeFilter === option.key}
-                    title={`Show ${option.label.toLowerCase()} test cases`}
-                    onPointerDown={() => setActiveFilter(option.key)}
-                    onMouseDown={() => setActiveFilter(option.key)}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setActiveFilter(option.key);
-                    }}
-                    style={{
-                      position: "relative",
-                      zIndex: 51,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      minHeight: "28px",
-                      padding: "6px 9px",
-                      cursor: "pointer",
-                      pointerEvents: "auto",
-                      touchAction: "manipulation",
-                      userSelect: "none",
-                    }}
-                  >
-                    {option.label}
-                    <span style={{ marginLeft: "5px", opacity: 0.8 }}>{option.count}</span>
-                  </button>
-                ))}
+                <div
+                  className="range-switcher comparison-filter-controls"
+                  role="group"
+                  aria-label="Filter comparison results"
+                  style={{
+                    position: "relative",
+                    zIndex: 50,
+                    isolation: "isolate",
+                    pointerEvents: "auto",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "3px",
+                    marginBottom: 0,
+                  }}
+                >
+                  {filterOptions.map((option) => (
+                    <button
+                      type="button"
+                      key={option.key}
+                      className={activeFilter === option.key ? "range-active" : ""}
+                      aria-pressed={activeFilter === option.key}
+                      title={`Show ${option.label.toLowerCase()} test cases`}
+                      onPointerDown={() => {
+                        setActiveFilter(option.key);
+                        setExportNotice("");
+                      }}
+                      onMouseDown={() => setActiveFilter(option.key)}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setActiveFilter(option.key);
+                        setExportNotice("");
+                      }}
+                      style={{
+                        position: "relative",
+                        zIndex: 51,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minHeight: "28px",
+                        padding: "6px 9px",
+                        cursor: "pointer",
+                        pointerEvents: "auto",
+                        touchAction: "manipulation",
+                        userSelect: "none",
+                      }}
+                    >
+                      {option.label}
+                      <span style={{ marginLeft: "5px", opacity: 0.8 }}>{option.count}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="insights-action comparison-export-button"
+                  onClick={handleExportCsv}
+                  disabled={!comparison || filteredCases.length === 0 || isComparing}
+                  title="Download the currently displayed comparison rows as a CSV file"
+                  style={{ minHeight: "32px", flexShrink: 0 }}
+                >
+                  ↓ Export CSV ({filteredCases.length})
+                </button>
               </div>
 
               <p className="details-state comparison-filter-status" role="status" aria-live="polite">
                 Showing {filteredCases.length} of {allCases.length} test cases
                 {activeFilter !== "all" ? ` · Filter: ${filterOptions.find((option) => option.key === activeFilter)?.label ?? activeFilter}` : ""}
               </p>
+              {exportNotice && (
+                <p className="details-state" role="status" aria-live="polite">
+                  {exportNotice}
+                </p>
+              )}
 
               {filteredCases.length === 0 ? (
                 <div className="insights-empty">
@@ -395,12 +512,7 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                           <td><RunStatus status={item.after?.status} /></td>
                           <td><span className={`comparison-change ${item.change}`}>{item.change}</span></td>
                           <td>
-                            {item.change === "regressed" && (item.after?.message || "The test now fails or errors.")}
-                            {item.change === "fixed" && "Previously failing test now passes or skips."}
-                            {item.change === "changed" && (item.after?.message || "Test status or failure message changed.")}
-                            {item.change === "added" && "Test appears only in the compared run."}
-                            {item.change === "removed" && "Test appears only in the baseline run."}
-                            {item.change === "unchanged" && (isFailure(item.after?.status ?? "passed") ? item.after?.message || "Failure status unchanged." : "No status change.")}
+                            {changeDetail(item)}
                           </td>
                         </tr>
                       ))}
