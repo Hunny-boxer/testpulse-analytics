@@ -115,6 +115,15 @@ function csvCell(value: string | number | null | undefined): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function escapeHtml(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function statusForCsv(testCase: TestCaseDetails | null): string {
   return testCase ? statusLabel(testCase.status) : "Not present";
 }
@@ -277,6 +286,166 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
     setExportNotice(
       `Exported ${filteredCases.length} test case${filteredCases.length === 1 ? "" : "s"} to CSV.`
     );
+  }
+
+  function handleExportPdf() {
+    if (!comparison || filteredCases.length === 0) return;
+
+    // Open synchronously from the button click so popup blockers are less likely to block it.
+    const reportWindow = window.open("", "_blank");
+    if (!reportWindow) {
+      setExportNotice("The report window was blocked. Allow pop-ups for this dashboard and try again.");
+      return;
+    }
+
+    const summaryCards = [
+      ["Tests compared", comparison.cases.length],
+      ["Regressions", changeCounts.regressions],
+      ["Fixed", changeCounts.fixes],
+      ["Changed", changeCounts.changed],
+      ["Added", changeCounts.added],
+      ["Removed", changeCounts.removed],
+    ];
+
+    const summaryHtml = summaryCards
+      .map(([label, count]) => `
+        <div class="metric">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(count)}</strong>
+        </div>
+      `)
+      .join("");
+
+    const rowsHtml = filteredCases
+      .map((item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.name)}</strong></td>
+          <td>${escapeHtml(item.className)}</td>
+          <td><span class="status status-${item.before?.status ?? "missing"}">${escapeHtml(statusForCsv(item.before))}</span></td>
+          <td><span class="status status-${item.after?.status ?? "missing"}">${escapeHtml(statusForCsv(item.after))}</span></td>
+          <td><span class="change change-${item.change}">${escapeHtml(item.change)}</span></td>
+          <td>${escapeHtml(changeDetail(item))}</td>
+        </tr>
+      `)
+      .join("");
+
+    const filterLabel = filterOptions.find((option) => option.key === activeFilter)?.label ?? "All";
+    const generatedAt = new Date().toLocaleString();
+
+    const reportHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TestPulse Comparison Report - Run #${comparison.baseline.id} vs Run #${comparison.compared.id}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #20202a; background: #fff; font: 10px/1.5 Arial, Helvetica, sans-serif; }
+    .report { max-width: 1400px; margin: 0 auto; }
+    .topline { color: #7352c7; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 5px; }
+    h1 { margin: 0; color: #211936; font-size: 25px; letter-spacing: -0.5px; }
+    .subtitle { margin: 5px 0 0; color: #666174; font-size: 10px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; border-bottom: 2px solid #8b6ce0; padding-bottom: 14px; margin-bottom: 16px; }
+    .generated { color: #756f80; text-align: right; font-size: 9px; white-space: nowrap; }
+    .run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 17px; }
+    .run-card { border: 1px solid #e2dced; border-radius: 7px; padding: 11px 13px; background: #fbfaff; min-width: 0; }
+    .run-label { display: block; color: #75658f; font-size: 8px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
+    .run-card strong { display: block; color: #251a3d; font-size: 13px; margin-bottom: 2px; }
+    .run-file { display: block; color: #514963; overflow-wrap: anywhere; }
+    .run-date { display: block; color: #777083; font-size: 9px; margin-top: 3px; }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin: 0 0 9px; }
+    h2 { margin: 0; color: #28203a; font-size: 13px; }
+    .filter-meta { color: #6d657a; font-size: 9px; text-align: right; }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+    .metric { min-width: 0; border: 1px solid #e6e0ef; border-radius: 7px; padding: 9px 11px; }
+    .metric span { display: block; color: #6d657a; font-size: 9px; }
+    .metric strong { display: block; margin-top: 3px; color: #2b2141; font-size: 20px; }
+    .metric:nth-child(2) strong { color: #c03955; }
+    .metric:nth-child(3) strong { color: #167b58; }
+    .table-wrap { border: 1px solid #e1dce9; border-radius: 7px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    th { padding: 8px 9px; background: #f2eef9; color: #443657; text-align: left; font-size: 8px; letter-spacing: .5px; text-transform: uppercase; border-bottom: 1px solid #dcd4eb; }
+    td { padding: 8px 9px; vertical-align: top; border-bottom: 1px solid #eeeaf4; overflow-wrap: anywhere; font-size: 9px; }
+    tbody tr:nth-child(even) { background: #fbfaff; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:nth-child(1) { width: 17%; } th:nth-child(2) { width: 18%; } th:nth-child(3) { width: 11%; } th:nth-child(4) { width: 11%; } th:nth-child(5) { width: 10%; } th:nth-child(6) { width: 33%; }
+    .status, .change { display: inline-block; border-radius: 4px; padding: 3px 6px; font-weight: 700; font-size: 8px; background: #f1eff5; color: #665c73; }
+    .status-passed, .change-fixed { background: #e7f7ef; color: #13784f; }
+    .status-failed, .status-error, .change-regressed { background: #fde9ed; color: #b32642; }
+    .status-skipped, .status-missing { background: #edf2f8; color: #55677c; }
+    .change-changed { background: #f0eaff; color: #6f49bd; }
+    .change-added { background: #e5f5fc; color: #17698e; }
+    .change-removed { background: #fff1df; color: #975813; }
+    .notes { margin-top: 12px; color: #777083; font-size: 9px; }
+    .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 8px; border-top: 1px solid #e3deeb; color: #81798d; font-size: 8px; }
+    .print-hint { margin-top: 12px; padding: 9px 10px; border: 1px dashed #cfc4e8; border-radius: 6px; color: #5a4a79; font-size: 9px; }
+    @media print { .print-hint { display: none; } tr { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <main class="report">
+    <header class="header">
+      <div>
+        <p class="topline">TestPulse Analytics / Test History</p>
+        <h1>Test Comparison Report</h1>
+        <p class="subtitle">Run-to-run changes across saved JUnit test reports</p>
+      </div>
+      <div class="generated">Generated<br><strong>${escapeHtml(generatedAt)}</strong></div>
+    </header>
+
+    <section class="run-grid">
+      <div class="run-card">
+        <span class="run-label">Baseline run</span>
+        <strong>Run #${escapeHtml(comparison.baseline.id)}</strong>
+        <span class="run-file">${escapeHtml(comparison.baseline.filename)}</span>
+        <span class="run-date">Created: ${escapeHtml(formatDate(comparison.baseline.created_at))}</span>
+      </div>
+      <div class="run-card">
+        <span class="run-label">Compared run</span>
+        <strong>Run #${escapeHtml(comparison.compared.id)}</strong>
+        <span class="run-file">${escapeHtml(comparison.compared.filename)}</span>
+        <span class="run-date">Created: ${escapeHtml(formatDate(comparison.compared.created_at))}</span>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>Comparison summary</h2>
+        <span class="filter-meta">Filter: ${escapeHtml(filterLabel)} · Included rows: ${filteredCases.length} of ${comparison.cases.length}</span>
+      </div>
+      <div class="metrics">${summaryHtml}</div>
+    </section>
+
+    <section>
+      <div class="section-title"><h2>Test case details</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Test name</th><th>Test class</th><th>Baseline status</th><th>Compared status</th><th>Change</th><th>Detail</th></tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <p class="notes">Regressions are tests that were not failing in the baseline but fail or error in the compared run. Test matching uses class name and test name.</p>
+    </section>
+
+    <div class="footer">
+      <span>TestPulse Analytics · Test history comparison</span>
+      <span>Baseline Run #${escapeHtml(comparison.baseline.id)} → Compared Run #${escapeHtml(comparison.compared.id)}</span>
+    </div>
+    <p class="print-hint">To save this report as a PDF, choose <strong>Save as PDF</strong> in your browser's print dialog. For a clean report, keep landscape layout selected.</p>
+  </main>
+</body>
+</html>`;
+
+    reportWindow.document.open();
+    reportWindow.document.write(reportHtml);
+    reportWindow.document.close();
+    reportWindow.focus();
+    reportWindow.setTimeout(() => reportWindow.print(), 500);
+    setExportNotice("PDF-ready report opened. Choose Save as PDF in the print dialog.");
   }
 
   const filterOptions: Array<{
@@ -462,16 +631,28 @@ export default function RunComparison({ runs, isLoadingRuns }: RunComparisonProp
                   ))}
                 </div>
 
-                <button
-                  type="button"
-                  className="insights-action comparison-export-button"
-                  onClick={handleExportCsv}
-                  disabled={!comparison || filteredCases.length === 0 || isComparing}
-                  title="Download the currently displayed comparison rows as a CSV file"
-                  style={{ minHeight: "32px", flexShrink: 0 }}
-                >
-                  ↓ Export CSV ({filteredCases.length})
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="insights-action comparison-export-button"
+                    onClick={handleExportCsv}
+                    disabled={!comparison || filteredCases.length === 0 || isComparing}
+                    title="Download the currently displayed comparison rows as a CSV file"
+                    style={{ minHeight: "32px", flexShrink: 0 }}
+                  >
+                    ↓ Export CSV ({filteredCases.length})
+                  </button>
+                  <button
+                    type="button"
+                    className="insights-action comparison-export-button"
+                    onClick={handleExportPdf}
+                    disabled={!comparison || filteredCases.length === 0 || isComparing}
+                    title="Open a print-ready report that can be saved as PDF"
+                    style={{ minHeight: "32px", flexShrink: 0 }}
+                  >
+                    ↓ Export PDF
+                  </button>
+                </div>
               </div>
 
               <p className="details-state comparison-filter-status" role="status" aria-live="polite">
