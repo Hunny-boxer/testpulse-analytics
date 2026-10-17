@@ -1,3 +1,4 @@
+import "./QualityTrends.css";
 import { useEffect, useMemo, useState } from "react";
 import { getRunDetails } from "./api";
 import type { RunDetails, TestCaseDetails, TestRun } from "./api";
@@ -55,11 +56,6 @@ function formatDelta(value: number | null): string {
   return `${sign}${Math.abs(value).toFixed(1)} percentage points vs previous run`;
 }
 
-function formatRunDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Date unavailable";
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 function buildRatePath(points: QualityPoint[], key: "passRate" | "failureRate"): string {
   if (points.length === 0) return "";
