@@ -1,3 +1,4 @@
+import { supabase } from "./supabase";
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
@@ -70,6 +71,25 @@ export type UploadedReport = {
   test_cases: TestCaseDetails[];
 };
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!session?.access_token) {
+    return {};
+  }
+
+  return {
+    Authorization: `Bearer ${session.access_token}`,
+  };
+}
+
 async function requestJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = `Request failed (${response.status}).`;
@@ -96,11 +116,16 @@ async function requestJson<T>(response: Response): Promise<T> {
 }
 
 export async function getRuns(): Promise<RunListResponse> {
+  const headers = await getAuthHeaders();
+
   const response = await fetch(
     `${API_BASE_URL}/api/v1/runs?limit=100&offset=0`,
     {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...headers,
+      },
     }
   );
 
@@ -110,11 +135,16 @@ export async function getRuns(): Promise<RunListResponse> {
 export async function getRunDetails(
   runId: number
 ): Promise<RunDetails> {
+  const headers = await getAuthHeaders();
+
   const response = await fetch(
     `${API_BASE_URL}/api/v1/runs/${runId}`,
     {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...headers,
+      },
     }
   );
 
@@ -127,10 +157,13 @@ export async function uploadReport(
   const formData = new FormData();
   formData.append("file", file);
 
+  const headers = await getAuthHeaders();
+
   const response = await fetch(
     `${API_BASE_URL}/api/v1/reports/upload`,
     {
       method: "POST",
+      headers,
       body: formData,
     }
   );
