@@ -1,4 +1,3 @@
-
 """Portable SQLite and PostgreSQL persistence for TestPulse."""
 
 from __future__ import annotations
@@ -20,7 +19,9 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.engine import URL, Engine
 
@@ -35,6 +36,7 @@ test_runs = Table(
     "test_runs",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("owner_user_id", String(255), nullable=True),
     Column("filename", String(255), nullable=False),
     Column("created_at", String, nullable=False),
     Column("suite_count", Integer, nullable=False),
@@ -88,14 +90,13 @@ test_cases = Table(
 )
 
 Index("idx_test_runs_created_at", test_runs.c.created_at)
+Index("idx_test_runs_owner_user_id", test_runs.c.owner_user_id)
 Index("idx_test_cases_run_status", test_cases.c.run_id, test_cases.c.status)
 
 
 def _create_engine(db_path: str | Path | None = None) -> Engine:
     """Create an engine using an explicit path, database URL, or SQLite."""
 
-    # An explicit path or TESTPULSE_DB_PATH selects SQLite.
-    # This preserves isolated SQLite databases in the existing test suite.
     configured_path = db_path or os.getenv("TESTPULSE_DB_PATH")
 
     if configured_path is not None:
@@ -113,7 +114,6 @@ def _create_engine(db_path: str | Path | None = None) -> Engine:
     )
 
     if database_url:
-        # Render and some database providers supply postgres:// URLs.
         if database_url.startswith("postgres://"):
             database_url = database_url.replace(
                 "postgres://",
@@ -129,7 +129,6 @@ def _create_engine(db_path: str | Path | None = None) -> Engine:
 
         return create_engine(database_url, pool_pre_ping=True)
 
-    # Local development fallback.
     DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     return create_engine(
@@ -141,11 +140,35 @@ def _create_engine(db_path: str | Path | None = None) -> Engine:
 def initialize_database(
     db_path: str | Path | None = None,
 ) -> None:
-    """Create the report tables and indexes if they do not exist."""
+    """Create tables and apply the additive ownership migration."""
+
     engine = _create_engine(db_path)
 
     try:
         metadata.create_all(engine)
+
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("test_runs")
+        }
+
+        # Existing databases need an explicit migration because
+        # create_all() does not add columns to existing tables.
+        if "owner_user_id" not in columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE test_runs "
+                        "ADD COLUMN owner_user_id VARCHAR(255)"
+                    )
+                )
+
+        # Ensure the index exists after the column has been added.
+        Index(
+            "idx_test_runs_owner_user_id",
+            test_runs.c.owner_user_id,
+        ).create(engine, checkfirst=True)
+
     finally:
         engine.dispose()
 
@@ -154,8 +177,10 @@ def save_report(
     filename: str,
     report: dict[str, Any],
     db_path: str | Path | None = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Persist a parsed report and return its run ID and creation time."""
+    """Persist a report with an optional owner identity."""
+
     initialize_database(db_path)
 
     summary = report["summary"]
@@ -166,6 +191,7 @@ def save_report(
         with engine.begin() as connection:
             result = connection.execute(
                 test_runs.insert().values(
+                    owner_user_id=owner_user_id,
                     filename=filename,
                     created_at=created_at,
                     suite_count=summary["suite_count"],
@@ -177,6 +203,7 @@ def save_report(
                     duration_seconds=summary["duration_seconds"],
                 )
             )
+
             run_id = int(result.inserted_primary_key[0])
 
             for suite in report["test_suites"]:
@@ -207,6 +234,7 @@ def save_report(
                 )
 
         return {"id": run_id, "created_at": created_at}
+
     finally:
         engine.dispose()
 
@@ -215,15 +243,24 @@ def list_runs(
     limit: int = 50,
     offset: int = 0,
     db_path: str | Path | None = None,
+    owner_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent test runs with their summary metrics."""
+    """Return recent reports, optionally filtered to a specific owner."""
+
     initialize_database(db_path)
     engine = _create_engine(db_path)
 
     try:
         with engine.connect() as connection:
+            statement = select(test_runs)
+
+            if owner_user_id is not None:
+                statement = statement.where(
+                    test_runs.c.owner_user_id == owner_user_id
+                )
+
             rows = connection.execute(
-                select(test_runs)
+                statement
                 .order_by(test_runs.c.id.desc())
                 .limit(limit)
                 .offset(offset)
@@ -246,6 +283,7 @@ def list_runs(
                 }
                 for row in rows
             ]
+
     finally:
         engine.dispose()
 
@@ -253,16 +291,25 @@ def list_runs(
 def get_run(
     run_id: int,
     db_path: str | Path | None = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return a run with its suites and cases, or None if it is missing."""
+    """Return a run only if it exists and matches the optional owner."""
+
     initialize_database(db_path)
     engine = _create_engine(db_path)
 
     try:
         with engine.connect() as connection:
-            row = connection.execute(
-                select(test_runs).where(test_runs.c.id == run_id)
-            ).mappings().first()
+            statement = select(test_runs).where(
+                test_runs.c.id == run_id
+            )
+
+            if owner_user_id is not None:
+                statement = statement.where(
+                    test_runs.c.owner_user_id == owner_user_id
+                )
+
+            row = connection.execute(statement).mappings().first()
 
             if row is None:
                 return None
@@ -316,5 +363,6 @@ def get_run(
                     for case in cases
                 ],
             }
+
     finally:
         engine.dispose()
