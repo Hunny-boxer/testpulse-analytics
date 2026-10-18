@@ -966,8 +966,10 @@ function App() {
           </div>
         </section>
 
-        {/* New quality trends dashboard */}
-        <QualityTrends runs={runs} />
+        <QualityTrends
+          runs={runs}
+          onSelectRun={handleSelectFailureRun}
+        />
 
         <RunComparison runs={runs} isLoadingRuns={isLoading} />
 
