@@ -923,3 +923,40 @@
     align-items: center;
   }
 }
+
+/* Open run details button */
+.quality-open-run-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 7px;
+  background: rgba(167, 139, 250, 0.12);
+  color: #d8cbff;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  appearance: none;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.quality-open-run-button:hover {
+  background: rgba(167, 139, 250, 0.24);
+  border-color: rgba(183, 162, 255, 0.65);
+}
+
+.quality-open-run-button:focus-visible {
+  outline: 2px solid #b7a2ff;
+  outline-offset: 3px;
+}
+
+.quality-open-run-button:active {
+  transform: translateY(1px);
+}
