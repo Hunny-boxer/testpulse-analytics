@@ -140,34 +140,43 @@ def _create_engine(db_path: str | Path | None = None) -> Engine:
 def initialize_database(
     db_path: str | Path | None = None,
 ) -> None:
-    """Create tables and apply the additive ownership migration."""
+    """Create tables and safely apply the additive ownership migration."""
 
     engine = _create_engine(db_path)
 
     try:
+        # Add the ownership column before creating indexes that depend on it.
+        # This preserves records in databases created by older versions.
+        inspector = inspect(engine)
+
+        if inspector.has_table("test_runs"):
+            columns = {
+                column["name"]
+                for column in inspector.get_columns("test_runs")
+            }
+
+            if "owner_user_id" not in columns:
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE test_runs "
+                            "ADD COLUMN owner_user_id VARCHAR(255)"
+                        )
+                    )
+
+        # Creates missing tables and declared indexes.
         metadata.create_all(engine)
 
-        columns = {
-            column["name"]
-            for column in inspect(engine).get_columns("test_runs")
-        }
-
-        # Existing databases need an explicit migration because
-        # create_all() does not add columns to existing tables.
-        if "owner_user_id" not in columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE test_runs "
-                        "ADD COLUMN owner_user_id VARCHAR(255)"
-                    )
+        # Idempotently ensure the ownership index exists. Do not create a
+        # second SQLAlchemy Index object, as the index is declared above.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "idx_test_runs_owner_user_id "
+                    "ON test_runs (owner_user_id)"
                 )
-
-        # Ensure the index exists after the column has been added.
-        Index(
-            "idx_test_runs_owner_user_id",
-            test_runs.c.owner_user_id,
-        ).create(engine, checkfirst=True)
+            )
 
     finally:
         engine.dispose()
