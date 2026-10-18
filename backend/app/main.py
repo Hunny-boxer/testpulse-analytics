@@ -1,12 +1,12 @@
-
 """FastAPI application for TestPulse Analytics."""
 
 import logging
 import os
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import get_current_user
 from app.db.database import get_run, list_runs, save_report
 from app.services.junit_parser import (
     JUnitParseError,
@@ -54,7 +54,7 @@ def root() -> dict:
 
 @app.get("/health", tags=["health"])
 def health_check() -> dict:
-    """Return the API health status."""
+    """Return the API health status without requiring a user session."""
     return {
         "status": "ok",
         "service": "TestPulse Analytics",
@@ -62,8 +62,11 @@ def health_check() -> dict:
 
 
 @app.post("/api/v1/reports/upload", tags=["reports"])
-async def upload_junit_report(file: UploadFile = File(...)) -> dict:
-    """Parse and persist an uploaded JUnit XML report."""
+async def upload_junit_report(
+    file: UploadFile = File(...),
+    current_user: dict[str, str] = Depends(get_current_user),
+) -> dict:
+    """Parse and persist a JUnit XML report for the authenticated user."""
     raw_filename = file.filename or "report.xml"
     filename = raw_filename.replace("\\", "/").split("/")[-1]
 
@@ -91,7 +94,11 @@ async def upload_junit_report(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        saved = save_report(filename[:255], report)
+        saved = save_report(
+            filename[:255],
+            report,
+            owner_user_id=current_user["id"],
+        )
     except Exception as exc:
         logger.exception("Database write failed while saving a JUnit report")
         raise HTTPException(
@@ -111,10 +118,15 @@ async def upload_junit_report(file: UploadFile = File(...)) -> dict:
 def get_recent_runs(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    current_user: dict[str, str] = Depends(get_current_user),
 ) -> dict:
-    """Return recent stored test runs, newest first."""
+    """Return only the authenticated user's stored test runs."""
     try:
-        runs = list_runs(limit=limit, offset=offset)
+        runs = list_runs(
+            limit=limit,
+            offset=offset,
+            owner_user_id=current_user["id"],
+        )
     except Exception as exc:
         logger.exception("Database query failed while retrieving test runs")
         raise HTTPException(
@@ -131,8 +143,11 @@ def get_recent_runs(
 
 
 @app.get("/api/v1/runs/{run_id}", tags=["runs"])
-def get_run_details(run_id: int) -> dict:
-    """Return one stored run with its suites and test cases."""
+def get_run_details(
+    run_id: int,
+    current_user: dict[str, str] = Depends(get_current_user),
+) -> dict:
+    """Return a run only when it belongs to the authenticated user."""
     if run_id < 1:
         raise HTTPException(
             status_code=422,
@@ -140,7 +155,10 @@ def get_run_details(run_id: int) -> dict:
         )
 
     try:
-        run = get_run(run_id)
+        run = get_run(
+            run_id,
+            owner_user_id=current_user["id"],
+        )
     except Exception as exc:
         logger.exception(
             "Database query failed while retrieving test run details"
@@ -151,9 +169,11 @@ def get_run_details(run_id: int) -> dict:
         ) from exc
 
     if run is None:
+        # The run may not exist, or it may belong to another user.
+        # Return the same response for both cases to avoid leaking its existence.
         raise HTTPException(
             status_code=404,
-            detail=f"Test run {run_id} was not found.",
+            detail="Test run was not found.",
         )
 
     return run
