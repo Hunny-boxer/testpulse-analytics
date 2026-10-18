@@ -1,12 +1,22 @@
-
+import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import get_current_user
 from app.main import app
 from app.services.junit_parser import MAX_XML_BYTES
 
 
 client = TestClient(app)
 
+TEST_USER_A = {
+    "id": "test-user-a",
+    "email": "user-a@example.com",
+}
+
+TEST_USER_B = {
+    "id": "test-user-b",
+    "email": "user-b@example.com",
+}
 
 VALID_XML = b"""<?xml version="1.0"?>
 <testsuite name="api-tests">
@@ -16,6 +26,14 @@ VALID_XML = b"""<?xml version="1.0"?>
     </testcase>
 </testsuite>
 """
+
+
+@pytest.fixture(autouse=True)
+def override_authentication_for_tests():
+    """Use a deterministic test identity instead of calling Supabase."""
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_A.copy()
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def use_test_database(monkeypatch, tmp_path):
@@ -176,10 +194,50 @@ def test_run_details_return_404_when_missing(monkeypatch, tmp_path):
     response = client.get("/api/v1/runs/99999")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Test run 99999 was not found."
+    assert response.json()["detail"] == "Test run was not found."
 
 
 def test_runs_endpoint_validates_pagination():
     response = client.get("/api/v1/runs?limit=0")
 
     assert response.status_code == 422
+
+
+def test_protected_report_endpoints_require_authentication():
+    """The upload, list, and detail routes reject unauthenticated requests."""
+    app.dependency_overrides.pop(get_current_user, None)
+
+    try:
+        list_response = client.get("/api/v1/runs")
+        upload_response = client.post(
+            "/api/v1/reports/upload",
+            files={"file": ("results.xml", VALID_XML, "application/xml")},
+        )
+        detail_response = client.get("/api/v1/runs/1")
+
+        assert list_response.status_code == 401
+        assert upload_response.status_code == 401
+        assert detail_response.status_code == 401
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: TEST_USER_A.copy()
+
+
+def test_users_cannot_list_or_open_each_others_reports(monkeypatch, tmp_path):
+    """Stored reports and details are scoped to the verified Supabase user ID."""
+    use_test_database(monkeypatch, tmp_path)
+
+    uploaded = upload_valid_report()
+    assert uploaded.status_code == 200
+    run_id = uploaded.json()["run_id"]
+
+    # Switch the verified identity to another user.
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_B.copy()
+
+    list_response = client.get("/api/v1/runs")
+    detail_response = client.get(f"/api/v1/runs/{run_id}")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["runs"] == []
+    assert list_response.json()["count"] == 0
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "Test run was not found."
