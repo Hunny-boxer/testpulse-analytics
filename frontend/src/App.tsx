@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getRunDetails, getRuns, uploadReport } from "./api";
 import Auth from "./Auth";
@@ -54,6 +54,8 @@ function formatDate(value: string): string {
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [query, setQuery] = useState("");
   const [selectedRange, setSelectedRange] = useState("7 days");
@@ -182,6 +184,49 @@ function App() {
 
     void refreshRuns();
   }, [authReady, session?.access_token]);
+
+  async function handleSignOut() {
+    try {
+      const { error: signOutError } = await supabase.auth.signOut();
+
+      if (signOutError) {
+        setError(signOutError.message);
+        return;
+      }
+
+      setIsWorkspaceMenuOpen(false);
+    } catch (signOutError) {
+      setError(getErrorMessage(signOutError));
+    }
+  }
+
+  // Close the workspace menu when clicking outside it or pressing Escape.
+  useEffect(() => {
+    if (!isWorkspaceMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !workspaceMenuRef.current?.contains(event.target)
+      ) {
+        setIsWorkspaceMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsWorkspaceMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isWorkspaceMenuOpen]);
 
   // Keep the active sidebar item synchronized with the section being viewed.
   useEffect(() => {
@@ -396,13 +441,104 @@ function App() {
         </a>
 
         <div className="workspace-label">WORKSPACE</div>
-        <div className="workspace-switcher">
-          <span className="workspace-avatar">T</span>
-          <span className="workspace-copy">
-            <strong>TestPulse workspace</strong>
-            <small>Local environment</small>
-          </span>
-          <span className="chevron">⌄</span>
+        <div ref={workspaceMenuRef} style={{ position: "relative" }}>
+          <button
+            type="button"
+            className="workspace-switcher"
+            aria-haspopup="menu"
+            aria-expanded={isWorkspaceMenuOpen}
+            aria-controls="workspace-account-menu"
+            onClick={() => setIsWorkspaceMenuOpen((open) => !open)}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              color: "inherit",
+              font: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            <span className="workspace-avatar">T</span>
+            <span className="workspace-copy">
+              <strong>TestPulse workspace</strong>
+              <small>Local environment</small>
+            </span>
+            <span className="chevron" aria-hidden="true">
+              {isWorkspaceMenuOpen ? "⌃" : "⌄"}
+            </span>
+          </button>
+
+          {isWorkspaceMenuOpen && (
+            <div
+              id="workspace-account-menu"
+              role="menu"
+              aria-label="Workspace account menu"
+              style={{
+                position: "absolute",
+                top: "calc(100% + 8px)",
+                left: 0,
+                right: 0,
+                zIndex: 50,
+                padding: "8px",
+                border: "1px solid var(--border)",
+                borderRadius: "12px",
+                background: "#181124",
+                boxShadow: "0 16px 36px rgba(0, 0, 0, 0.42)",
+              }}
+            >
+              <div
+                style={{
+                  padding: "8px 9px 12px",
+                  marginBottom: "6px",
+                  borderBottom: "1px solid var(--border)",
+                }}
+              >
+                <div
+                  style={{
+                    marginBottom: "6px",
+                    color: "var(--muted)",
+                    fontSize: "10px",
+                  }}
+                >
+                  SIGNED IN AS
+                </div>
+                <div
+                  title={session?.user.email ?? "TestPulse account"}
+                  style={{
+                    color: "#eae3f8",
+                    fontSize: "11px",
+                    lineHeight: 1.5,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {session?.user.email ?? "TestPulse account"}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void handleSignOut()}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "9px",
+                  width: "100%",
+                  padding: "10px 9px",
+                  border: "1px solid transparent",
+                  borderRadius: "8px",
+                  background: "transparent",
+                  color: "#fda4af",
+                  textAlign: "left",
+                  font: "inherit",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                <span aria-hidden="true">↪</span>
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
 
         <nav className="side-nav" aria-label="Main navigation">
@@ -485,27 +621,6 @@ function App() {
               <strong>{session?.user.email ?? "TestPulse"}</strong>
               <span>Signed in</span>
             </div>
-            <button
-              type="button"
-              aria-label="Sign out"
-              title="Sign out"
-              onClick={() => {
-                void supabase.auth.signOut().then(({ error: signOutError }) => {
-                  if (signOutError) setError(signOutError.message);
-                });
-              }}
-              style={{
-                background: "transparent",
-                color: "#c4b5fd",
-                border: "1px solid rgba(196,181,253,.25)",
-                borderRadius: "8px",
-                padding: "6px 8px",
-                cursor: "pointer",
-                fontSize: "11px",
-              }}
-            >
-              Sign out
-            </button>
           </div>
         </div>
       </aside>
